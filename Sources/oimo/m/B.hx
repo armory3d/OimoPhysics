@@ -179,11 +179,12 @@ class B {
 				log("names " + names);
 				if (names != null) {
 					newVars = newVars.concat(names.map(function(name) {
-						return {
+						var res:Var = {
 							name: name,
 							type: macro:Float,
 							expr: null
 						};
+						return res;
 					}));
 				}
 			}
