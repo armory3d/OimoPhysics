@@ -258,7 +258,7 @@ class MassMatrix {
 		}
 	}
 
-	@:extern
+	// @:extern
 	public function dump():Void {
 		trace("inverse mass matrix:");
 		dumpMatrix(_invMass);
@@ -277,7 +277,7 @@ class MassMatrix {
 		}
 	}
 
-	@:extern
+	// @:extern
 	public function dumpMatrix(data:Vector<Vector<Float>>):Void {
 		if (data.length == 0) {
 			trace("| |");
