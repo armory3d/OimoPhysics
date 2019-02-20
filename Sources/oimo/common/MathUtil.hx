@@ -120,7 +120,8 @@ class MathUtil {
 	 * Returns `Math.sqrt(x)`.
 	 */
 	public static inline function sqrt(x:Float):Float {
-		return Math.sqrt(x);
+		return x >= 0.0 ? Math.sqrt(x) : 0.0;
+		// return Math.sqrt(x);
 	}
 
 	/**
