@@ -6,6 +6,7 @@ import oimo.collision.narrowphase.detector.GjkEpaDetector;
 import oimo.collision.narrowphase.detector.SphereBoxDetector;
 import oimo.collision.narrowphase.detector.SphereCapsuleDetector;
 import oimo.collision.narrowphase.detector.SphereSphereDetector;
+import oimo.collision.narrowphase.detector.ConvexStaticMeshDetector;
 import oimo.collision.geometry.GeometryType;
 import oimo.collision.narrowphase.detector.*;
 
@@ -19,7 +20,7 @@ class CollisionMatrix {
 	@:dox(hide)
 	public function new() {
 		detectors = new Vector<Vector<Detector>>(8);
-		for (i in 0...6) {
+		for (i in 0...7) {
 			detectors[i] = new Vector<Detector>(8);
 		}
 
@@ -31,6 +32,7 @@ class CollisionMatrix {
 		var co:Int = GeometryType._CONE;
 		var ca:Int = GeometryType._CAPSULE;
 		var ch:Int = GeometryType._CONVEX_HULL;
+		var sm:Int = GeometryType._STATIC_MESH;
 
 		detectors[sp][sp] = new SphereSphereDetector();
 		detectors[sp][bo] = new SphereBoxDetector(false);
@@ -73,6 +75,23 @@ class CollisionMatrix {
 		detectors[ch][co] = gjkEpaDetector;
 		detectors[ch][ca] = gjkEpaDetector;
 		detectors[ch][ch] = gjkEpaDetector;
+
+		// Static mesh detectors - single detector handles all convex shapes
+		var convexStaticMeshDetector = new ConvexStaticMeshDetector(false);
+		detectors[sp][sm] = convexStaticMeshDetector;
+		detectors[bo][sm] = convexStaticMeshDetector;
+		detectors[cy][sm] = convexStaticMeshDetector;
+		detectors[co][sm] = convexStaticMeshDetector;
+		detectors[ca][sm] = convexStaticMeshDetector;
+		detectors[ch][sm] = convexStaticMeshDetector;
+
+		var convexStaticMeshDetectorSwapped = new ConvexStaticMeshDetector(true);
+		detectors[sm][sp] = convexStaticMeshDetectorSwapped;
+		detectors[sm][bo] = convexStaticMeshDetectorSwapped;
+		detectors[sm][cy] = convexStaticMeshDetectorSwapped;
+		detectors[sm][co] = convexStaticMeshDetectorSwapped;
+		detectors[sm][ca] = convexStaticMeshDetectorSwapped;
+		detectors[sm][ch] = convexStaticMeshDetectorSwapped;
 	}
 
 	// --- public ---

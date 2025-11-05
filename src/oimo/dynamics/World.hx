@@ -355,6 +355,8 @@ class World {
 			_drawCapsule(d, cast geom, tf, color);
 		case GeometryType._CONVEX_HULL:
 			_drawConvexHull(d, cast geom, tf, color);
+		case GeometryType._STATIC_MESH:
+			_drawStaticMesh(d, cast geom, tf, color);
 		}
 	}
 
@@ -438,6 +440,38 @@ class World {
 		_pool.dispose(v12);
 		_pool.dispose(v13);
 		_pool.dispose(normal);
+		_pool.dispose(m);
+		_pool.dispose(o);
+	}
+
+	extern inline function _drawStaticMesh(d:DebugDraw, g:StaticMeshGeometry, tf:Transform, color:Vec3):Void {
+		var m:Mat3 = _pool.mat3();
+		var o:Vec3 = _pool.vec3();
+		tf.getRotationTo(m);
+		tf.getPositionTo(o);
+		var v1:Vec3 = _pool.vec3();
+		var v2:Vec3 = _pool.vec3();
+		var v3:Vec3 = _pool.vec3();
+		var n:Vec3 = _pool.vec3();
+		for (i in 0...g.getNumTriangles()) {
+			g.getTriangleVertices(i, v1, v2, v3);
+			g.getTriangleNormal(i, n);
+			v1.mulMat3Eq(m).addEq(o);
+			v2.mulMat3Eq(m).addEq(o);
+			v3.mulMat3Eq(m).addEq(o);
+			n.mulMat3Eq(m);
+			if (d.wireframe) {
+				d.line(v1, v2, color);
+				d.line(v2, v3, color);
+				d.line(v3, v1, color);
+			} else {
+				d.triangle(v1, v2, v3, n, n, n, color);
+			}
+		}
+		_pool.dispose(v1);
+		_pool.dispose(v2);
+		_pool.dispose(v3);
+		_pool.dispose(n);
 		_pool.dispose(m);
 		_pool.dispose(o);
 	}

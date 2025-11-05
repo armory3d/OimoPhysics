@@ -11,6 +11,7 @@ class GeometryType {
 	public static inline var _CONE:Int        = 3;
 	public static inline var _CAPSULE:Int     = 4;
 	public static inline var _CONVEX_HULL:Int = 5;
+	public static inline var _STATIC_MESH:Int = 6;
 
 	public static inline var _CONVEX_MIN:Int = 0;
 	public static inline var _CONVEX_MAX:Int = 5;
@@ -56,4 +57,11 @@ class GeometryType {
 	 * See `ConvexHullGeometry`.
 	 */
 	public static var CONVEX_HULL(default, never):Int = _CONVEX_HULL;
+
+	/**
+	 * Represents a static mesh collision geometry.
+	 *
+	 * See `StaticMeshGeometry`.
+	 */
+	public static var STATIC_MESH(default, never):Int = _STATIC_MESH;
 }
