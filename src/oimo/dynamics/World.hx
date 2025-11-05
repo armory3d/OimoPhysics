@@ -204,8 +204,7 @@ class World {
 				// ignore if not touching
 				var cc:ContactConstraint = cl._contact._contactConstraint;
 				var ccs:ConstraintSolver = cl._contact._contactConstraint._solver;
-				if (cc.isTouching() && !ccs._addedToIsland) {
-
+				if (!cl._contact._triggering && cc.isTouching() && !ccs._addedToIsland) {
 					// add to constraint array (to clear island flag later)
 					if (_solversInIslands.length == _numSolversInIslands) {
 						M.array_expand(_solversInIslands, _numSolversInIslands);
@@ -665,12 +664,12 @@ class World {
 		var rylm:RotationalLimitMotor = j._rotLms[1];
 		var rzlm:RotationalLimitMotor = j._rotLms[2];
 		_drawTranslationalLimit3D(d, anchor1, basisX1, basisY1, basisZ1, txlm, tylm, tzlm, color);
-		
+
 		var rotYAxis:Vec3 = _pool.vec3();
 		M.vec3_toVec3(rotYAxis, j._axisY);
 		var rotYBasisX:Vec3 = _pool.vec3().copyFrom(basisX1);
 		var rotYBasisY:Vec3 = _pool.vec3().copyFrom(basisX1).crossEq(rotYAxis);
-		
+
 		_drawRotationalLimit(d, anchor2, basisY1, basisZ1, basisY1, radius, j._angleX - rxlm.upperLimit, j._angleX - rxlm.lowerLimit, color);
 		_drawRotationalLimit(d, anchor2, rotYBasisX, rotYBasisY, rotYBasisX, radius, rylm.lowerLimit - j._angleY, rylm.upperLimit - j._angleY, color);
 		_drawRotationalLimit(d, anchor2, basisX2, basisY2, basisX2, radius, rzlm.lowerLimit - j._angleZ, rzlm.upperLimit - j._angleZ, color);

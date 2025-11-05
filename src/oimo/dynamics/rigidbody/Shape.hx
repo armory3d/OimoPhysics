@@ -21,6 +21,7 @@ class Shape {
 	public var _next:Shape;
 	public var _rigidBody:RigidBody;
 	public var _geom:Geometry;
+	public var _isTrigger:Bool;
 
 	public var _localTransform:Transform;
 	public var _ptransform:Transform;
@@ -216,6 +217,13 @@ class Shape {
 	 */
 	public inline function getGeometry():Geometry {
 		return _geom;
+	}
+
+	/**
+	 * Sets if the Shape is trigger or not
+	 */
+	public function setIsTrigger(isTrigger:Bool):Void {
+		_isTrigger = isTrigger;
 	}
 
 	/**

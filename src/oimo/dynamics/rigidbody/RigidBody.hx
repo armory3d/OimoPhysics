@@ -1009,7 +1009,7 @@ class RigidBody {
 		if (_world != null) {
 			_world._removeShape(shape);
 		}
-		
+
 		// then, remove the shape from the linked list so that it will be ignored
 		M.list_remove(_shapeList, _shapeListLast, _prev, _next, shape);
 		_numShapes--;
