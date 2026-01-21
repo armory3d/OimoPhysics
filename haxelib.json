@@ -1,0 +1,12 @@
+{
+  "name": "OimoPhysics",
+  "url": "https://github.com/saharan/OimoPhysics",
+  "license": "MIT",
+  "tags": ["physics"],
+  "description": "A cross-platform 3D physics engine",
+  "version": "1.2.4",
+  "releasenote": "Bug fixes and improvements",
+  "contributors": ["saharan"],
+  "classPath": "src",
+  "dependencies": {}
+}
