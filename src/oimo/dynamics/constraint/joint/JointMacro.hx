@@ -5,7 +5,6 @@ import oimo.common.MathUtil;
 import oimo.common.Setting;
 
 @:dox(hide)
-@:extern
 class JointMacro {
 	// computes CFM_factor and ERP
 	// note:

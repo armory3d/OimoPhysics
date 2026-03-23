@@ -4,7 +4,6 @@ import haxe.macro.Expr.ExprOf;
 import oimo.m.M;
 
 @:dox(hide)
-@:extern
 class BoxBoxDetectorMacro {
 	/**
 	 * Performs SAT check and minimum depth update for an axis.

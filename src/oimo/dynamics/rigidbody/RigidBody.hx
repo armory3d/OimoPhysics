@@ -658,7 +658,7 @@ class RigidBody {
 	 * This does not create a new intrance of `Vec3`.
 	 */
 	public inline function getAngularVelocityTo(angularVelocity:Vec3):Void {
-		M.vec3_toVec3(angularVelocity, _vel);
+		M.vec3_toVec3(angularVelocity, _angVel);
 	}
 
 	/**
