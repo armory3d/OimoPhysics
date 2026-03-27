@@ -2,6 +2,7 @@ package oimo.collision.narrowphase.detector;
 import oimo.collision.geometry.*;
 import oimo.collision.narrowphase.*;
 import oimo.collision.narrowphase.detector.gjkepa.*;
+import oimo.common.MathUtil;
 import oimo.common.Transform;
 import oimo.common.Vec3;
 import oimo.m.IVec3;
@@ -35,7 +36,7 @@ class ConvexStaticMeshDetector extends Detector {
 		}
 
 		var gjkEpa:GjkEpa = GjkEpa.getInstance();
-		var bestPenetrationDepth:Float = -Math.POSITIVE_INFINITY;
+		var bestPenetrationDepth:Float = MathUtil.NEGATIVE_INFINITY;
 		var bestContactFound:Bool = false;
 		var bestNormalWorld:Vec3 = new Vec3();
 		var bestContactPointConvex:Vec3 = new Vec3();

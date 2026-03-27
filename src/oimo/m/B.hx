@@ -111,15 +111,18 @@ class B {
 
 					var names:Array<String> = field.name.names(t);
 					if (names != null) {
+						var generatedAccess = field.access == null ? [] : field.access.copy();
+						var originalAccess = field.access == null ? [] : field.access.copy();
 
 						U.pushVariables(fs2, names, macro:Float, [{
 							// hide private vars
 							name: ":dox",
 							params: [macro hide],
 							pos: U.pos()
-						}], field.access);
+						}], generatedAccess);
 
-						field.access.push(AExtern);
+						originalAccess.push(AExtern);
+						field.access = originalAccess;
 						fs2.push(field); // keep it for type inference
 					} else {
 						fs2.push(field);
