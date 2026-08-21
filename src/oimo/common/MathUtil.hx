@@ -8,12 +8,12 @@ class MathUtil {
 	/**
 	 * Positive infinity.
 	 */
-	public static inline var POSITIVE_INFINITY:Float = #if hl 1e300 #else 1e65536 #end;
+	public static inline var POSITIVE_INFINITY:Float = #if (hl || cpp) 1e300 #else 1e65536 #end;
 
 	/**
 	 * Negative infinity.
 	 */
-	public static inline var NEGATIVE_INFINITY:Float = #if hl -1e300 #else -1e65536 #end;
+	public static inline var NEGATIVE_INFINITY:Float = #if (hl || cpp) -1e300 #else -1e65536 #end;
 
 	/**
 	 * The ratio of the circumference of a circle to its diameter.
