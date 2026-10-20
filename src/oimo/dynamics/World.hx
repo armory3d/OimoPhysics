@@ -5,7 +5,7 @@ import oimo.collision.broadphase.*;
 import oimo.collision.broadphase.bruteforce.*;
 import oimo.collision.broadphase.bvh.*;
 import oimo.collision.geometry.*;
-import oimo.collision.narrowphase.detector.gjkepa.*;
+import oimo.collision.narrowphase.ConvexCastResolver;
 import oimo.common.*;
 import oimo.dynamics.callback.*;
 import oimo.dynamics.common.*;
@@ -949,11 +949,7 @@ class World {
 	 * transform `begin`.
 	 */
 	public function convexCast(convex:ConvexGeometry, begin:Transform, translation:Vec3, callback:RayCastCallback):Void {
-		_convexCastWrapper.convex = convex;
-		_convexCastWrapper.begin.copyFrom(begin);
-		_convexCastWrapper.translation.copyFrom(translation);
-		_convexCastWrapper.callback = callback;
-		_convexCastWrapper.sweptAabbReady = false;
+		_convexCastWrapper.prepare(convex, begin, translation, callback);
 
 		_broadPhase.convexCast(convex, begin, translation, _convexCastWrapper);
 	}
@@ -1096,141 +1092,28 @@ private class RayCastWrapper extends BroadPhaseProxyCallback {
 }
 
 // convex cast wrapper (broadphase -> world)
-@:build(oimo.m.B.bu())
 private class ConvexCastWrapper extends BroadPhaseProxyCallback {
-	public var callback:RayCastCallback;
-	public var begin:Transform;
-	public var translation:Vec3;
-	public var convex:ConvexGeometry;
+	var callback:RayCastCallback;
 
+	var resolver:ConvexCastResolver;
 	var rayCastHit:RayCastHit;
-	var triangleHit:RayCastHit;
-	var zero:Vec3;
-	var triangleVertices:Array<Vec3>;
-	var triangleGeom:ConvexHullGeometry;
-	var triangles:Array<Int>;
-	var sweptAabb:Aabb;
-	var localAabb:Aabb;
-	var edge1:Vec3;
-	var edge2:Vec3;
-
-	public var sweptAabbReady:Bool;
 
 	public function new() {
 		super();
+		resolver = new ConvexCastResolver();
 		rayCastHit = new RayCastHit();
-		triangleHit = new RayCastHit();
-
-		begin = new Transform();
-		translation = new Vec3();
-		zero = new Vec3();
-
-		triangleVertices = [new Vec3(), new Vec3(), new Vec3()];
-		triangleGeom = new ConvexHullGeometry(triangleVertices);
-		triangleGeom._gjkMargin = 0;
-		triangles = [];
-		sweptAabb = new Aabb();
-		localAabb = new Aabb();
-		edge1 = new Vec3();
-		edge2 = new Vec3();
-		sweptAabbReady = false;
-
 		callback = null;
-		convex = null;
+	}
+
+	public function prepare(convex:ConvexGeometry, begin:Transform, translation:Vec3, callback:RayCastCallback):Void {
+		this.callback = callback;
+		resolver.prepare(convex, begin, translation);
 	}
 
 	override public function process(proxy:Proxy):Void {
 		var shape:Shape = cast proxy.userData;
-		var type:Int = shape._geom._type;
-
-		if (type == GeometryType._STATIC_MESH) {
-			var staticMesh:StaticMeshGeometry = cast shape._geom;
-			if (convexCastStaticMesh(staticMesh, shape._transform)) {
-				callback.process(shape, rayCastHit);
-			}
-			return;
-		}
-
-		if (type < GeometryType._CONVEX_MIN || type > GeometryType._CONVEX_MAX) return;
-
-		var geom:ConvexGeometry = cast shape._geom;
-		if (GjkEpa.getInstance().convexCast(convex, geom, begin, shape._transform, translation, zero, rayCastHit)) {
+		if (resolver.resolve(shape._geom, shape._transform, rayCastHit)) {
 			callback.process(shape, rayCastHit);
-		}
-	}
-
-	function convexCastStaticMesh(staticMesh:StaticMeshGeometry, meshTransform:Transform):Bool {
-		if (!sweptAabbReady) {
-			convex._computeAabb(sweptAabb, begin);
-
-			var minx:Float = M.vec3_get(sweptAabb._min, 0);
-			var miny:Float = M.vec3_get(sweptAabb._min, 1);
-			var minz:Float = M.vec3_get(sweptAabb._min, 2);
-			var maxx:Float = M.vec3_get(sweptAabb._max, 0);
-			var maxy:Float = M.vec3_get(sweptAabb._max, 1);
-			var maxz:Float = M.vec3_get(sweptAabb._max, 2);
-
-			if (translation.x < 0) minx += translation.x; else maxx += translation.x;
-			if (translation.y < 0) miny += translation.y; else maxy += translation.y;
-			if (translation.z < 0) minz += translation.z; else maxz += translation.z;
-
-			M.vec3_set(sweptAabb._min, minx, miny, minz);
-			M.vec3_set(sweptAabb._max, maxx, maxy, maxz);
-			sweptAabbReady = true;
-		}
-
-		transformAabbToLocal(sweptAabb, meshTransform, localAabb);
-
-		staticMesh.queryTrianglesInto(localAabb, triangles);
-		if (triangles.length == 0) return false;
-
-		var gjkEpa:GjkEpa = GjkEpa.getInstance();
-		var bestFraction:Float = MathUtil.POSITIVE_INFINITY;
-		var found:Bool = false;
-
-		for (i in 0...triangles.length) {
-			staticMesh.getTriangleVertices(triangles[i], triangleVertices[0], triangleVertices[1], triangleVertices[2]);
-
-			edge1.copyFrom(triangleVertices[1]).subEq(triangleVertices[0]);
-			edge2.copyFrom(triangleVertices[2]).subEq(triangleVertices[0]);
-			if (edge1.crossEq(edge2).lengthSq() < 1e-12) continue;
-
-			if (gjkEpa.convexCast(convex, triangleGeom, begin, meshTransform, translation, zero, triangleHit)) {
-				if (triangleHit.fraction < bestFraction) {
-					bestFraction = triangleHit.fraction;
-					rayCastHit.position.copyFrom(triangleHit.position);
-					rayCastHit.normal.copyFrom(triangleHit.normal);
-					found = true;
-				}
-			}
-		}
-
-		if (!found) return false;
-		rayCastHit.fraction = bestFraction;
-		return true;
-	}
-
-	function transformAabbToLocal(worldAabb:Aabb, meshTransform:Transform, localAabb:Aabb):Void {
-		var corner:IVec3;
-		var local:IVec3;
-
-		for (i in 0...8) {
-			M.vec3_set(corner,
-				(i & 1) != 0 ? M.vec3_get(worldAabb._max, 0) : M.vec3_get(worldAabb._min, 0),
-				(i & 2) != 0 ? M.vec3_get(worldAabb._max, 1) : M.vec3_get(worldAabb._min, 1),
-				(i & 4) != 0 ? M.vec3_get(worldAabb._max, 2) : M.vec3_get(worldAabb._min, 2)
-			);
-
-			M.vec3_sub(local, corner, meshTransform._position);
-			M.vec3_mulMat3Transposed(local, local, meshTransform._rotation);
-
-			if (i == 0) {
-				M.vec3_assign(localAabb._min, local);
-				M.vec3_assign(localAabb._max, local);
-			} else {
-				M.vec3_min(localAabb._min, localAabb._min, local);
-				M.vec3_max(localAabb._max, localAabb._max, local);
-			}
 		}
 	}
 }

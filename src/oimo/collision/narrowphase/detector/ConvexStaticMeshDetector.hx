@@ -13,9 +13,11 @@ import oimo.m.M;
  */
 @:build(oimo.m.B.bu())
 class ConvexStaticMeshDetector extends Detector {
+	var triangleIndices:Array<Int>;
 
 	public function new(swapped:Bool = false) {
 		super(swapped);
+		triangleIndices = [];
 	}
 
 	override function detectImpl(result:DetectorResult, geom1:Geometry, geom2:Geometry, tf1:Transform, tf2:Transform, cachedData:CachedDetectorData):Void {
@@ -28,9 +30,9 @@ class ConvexStaticMeshDetector extends Detector {
 		convex._computeAabb(worldAABB, tf1);
 
 		var localAABB:Aabb = new Aabb();
-		_transformAABBToLocal(worldAABB, tf2, localAABB);
+		staticMesh.worldAabbToLocal(worldAABB, tf2, localAABB);
 
-		var triangleIndices:Array<Int> = staticMesh.queryTriangles(localAABB);
+		staticMesh.queryTrianglesInto(localAABB, triangleIndices);
 		if (triangleIndices.length == 0) {
 			return;
 		}
@@ -115,33 +117,6 @@ class ConvexStaticMeshDetector extends Detector {
 				M.vec3_get(contactPointConvex, 0), M.vec3_get(contactPointConvex, 1), M.vec3_get(contactPointConvex, 2),
 				M.vec3_get(contactPointMesh, 0), M.vec3_get(contactPointMesh, 1), M.vec3_get(contactPointMesh, 2),
 				bestPenetrationDepth, 0);
-		}
-	}
-
-	// Helper method to transform AABB from world space to mesh local space
-	function _transformAABBToLocal(worldAABB:Aabb, meshTransform:Transform, localAABB:Aabb):Void {
-		var minCorner:IVec3;
-		var maxCorner:IVec3;
-		var transformedCorner:IVec3;
-
-		M.vec3_assign(minCorner, worldAABB._min);
-		M.vec3_sub(minCorner, minCorner, meshTransform._position);
-		M.vec3_mulMat3Transposed(minCorner, minCorner, meshTransform._rotation);
-		M.vec3_assign(localAABB._min, minCorner);
-		M.vec3_assign(localAABB._max, minCorner);
-
-		for (i in 0...8) {
-			M.vec3_set(transformedCorner,
-				(i & 1) != 0 ? M.vec3_get(worldAABB._max, 0) : M.vec3_get(worldAABB._min, 0),
-				(i & 2) != 0 ? M.vec3_get(worldAABB._max, 1) : M.vec3_get(worldAABB._min, 1),
-				(i & 4) != 0 ? M.vec3_get(worldAABB._max, 2) : M.vec3_get(worldAABB._min, 2)
-			);
-
-			M.vec3_sub(transformedCorner, transformedCorner, meshTransform._position);
-			M.vec3_mulMat3Transposed(transformedCorner, transformedCorner, meshTransform._rotation);
-
-			M.vec3_min(localAABB._min, localAABB._min, transformedCorner);
-			M.vec3_max(localAABB._max, localAABB._max, transformedCorner);
 		}
 	}
 }

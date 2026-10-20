@@ -73,6 +73,34 @@ class StaticMeshGeometry extends Geometry {
 		_queryBVHRecursive(_triangleBVH._root, aabb, results);
 	}
 
+	/**
+	 * Transforms the world-space AABB `worldAabb` into this mesh's local space and
+	 * stores the result in `localAabb`.
+	 */
+	public function worldAabbToLocal(worldAabb:Aabb, meshTransform:Transform, localAabb:Aabb):Void {
+		var corner:IVec3;
+		var local:IVec3;
+
+		for (i in 0...8) {
+			M.vec3_set(corner,
+				(i & 1) != 0 ? M.vec3_get(worldAabb._max, 0) : M.vec3_get(worldAabb._min, 0),
+				(i & 2) != 0 ? M.vec3_get(worldAabb._max, 1) : M.vec3_get(worldAabb._min, 1),
+				(i & 4) != 0 ? M.vec3_get(worldAabb._max, 2) : M.vec3_get(worldAabb._min, 2)
+			);
+
+			M.vec3_sub(local, corner, meshTransform._position);
+			M.vec3_mulMat3Transposed(local, local, meshTransform._rotation);
+
+			if (i == 0) {
+				M.vec3_assign(localAabb._min, local);
+				M.vec3_assign(localAabb._max, local);
+			} else {
+				M.vec3_min(localAabb._min, localAabb._min, local);
+				M.vec3_max(localAabb._max, localAabb._max, local);
+			}
+		}
+	}
+
 	function _queryBVHRecursive(node:BvhNode, queryAABB:Aabb, results:Array<Int>):Void {
 		if (node == null) return;
 
