@@ -64,18 +64,19 @@ class StaticMeshGeometry extends Geometry {
 
 	public function queryTriangles(aabb:Aabb):Array<Int> {
 		var results:Array<Int> = [];
-		_queryBVHRecursive(_triangleBVH._root, aabb, results);
+		queryTrianglesInto(aabb, results);
 		return results;
+	}
+
+	public function queryTrianglesInto(aabb:Aabb, results:Array<Int>):Void {
+		results.resize(0);
+		_queryBVHRecursive(_triangleBVH._root, aabb, results);
 	}
 
 	function _queryBVHRecursive(node:BvhNode, queryAABB:Aabb, results:Array<Int>):Void {
 		if (node == null) return;
 
-		var nodeAABB = new Aabb();
-		M.vec3_assign(nodeAABB._min, node._aabbMin);
-		M.vec3_assign(nodeAABB._max, node._aabbMax);
-
-		if (!nodeAABB.overlap(queryAABB)) return;
+		if (!M.aabb_overlap(node._aabbMin, node._aabbMax, queryAABB._min, queryAABB._max)) return;
 
 		if (node._height == 0) {
 			var triangleIndex:Int = cast node._proxy.userData;
