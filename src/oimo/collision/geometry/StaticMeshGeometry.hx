@@ -1,8 +1,5 @@
 package oimo.collision.geometry;
 import haxe.ds.Vector;
-import oimo.collision.broadphase.bvh.BvhNode;
-import oimo.collision.broadphase.bvh.BvhProxy;
-import oimo.collision.broadphase.bvh.BvhTree;
 import oimo.common.MathUtil;
 import oimo.common.Transform;
 import oimo.common.Vec3;
@@ -11,6 +8,10 @@ import oimo.m.M;
 
 /**
  * Static mesh collision geometry with BVH spatial queries.
+ *
+ * The input vertices and indices are copied. The mesh is treated as immutable:
+ * modifying the arrays returned by `getVertices`/`getIndices` after construction
+ * invalidates the BVH and the cached triangle data.
  */
 @:build(oimo.m.B.bu())
 class StaticMeshGeometry extends Geometry {
@@ -19,40 +20,61 @@ class StaticMeshGeometry extends Geometry {
 	public var _normals:Vector<Vec3>;
 	public var _numVertices:Int;
 	public var _numTriangles:Int;
-	var _triangleAABBs:Vector<Aabb>;
-	var _triangleBVH:BvhTree;
-	var _triangleProxies:Vector<BvhProxy>;
-	var _nextProxyId:Int;
-
-	// Scratch data for mesh raycasts. Oimo queries are not reentrant, so the
-	// same buffers can be reused for every raycast.
-	var _rayCastAabb:Aabb;
-	var _rayCastTriangles:Array<Int>;
+	var _bvh:StaticMeshBvh;
 
 	public function new(vertices:Array<Vec3>, indices:Array<Int>, computeNormals:Bool = true) {
 		super(GeometryType._STATIC_MESH);
+
+		if (vertices == null) throw M.error("StaticMeshGeometry: vertices must not be null");
+		if (indices == null) throw M.error("StaticMeshGeometry: indices must not be null");
+		if (indices.length % 3 != 0) {
+			throw M.error("StaticMeshGeometry: indices length must be a multiple of 3");
+		}
+
 		_numVertices = vertices.length;
 		_numTriangles = Std.int(indices.length / 3);
 
 		_vertices = new Vector<Vec3>(_numVertices);
-		for (i in 0..._numVertices) _vertices[i] = new Vec3().copyFrom(vertices[i]);
+		for (i in 0..._numVertices) {
+			var vertex = vertices[i];
+			if (vertex == null) {
+				throw M.error("StaticMeshGeometry: vertex " + i + " must not be null");
+			}
+			if (!Math.isFinite(vertex.x) || !Math.isFinite(vertex.y) || !Math.isFinite(vertex.z)) {
+				throw M.error("StaticMeshGeometry: vertex " + i + " has a non-finite coordinate");
+			}
+			_vertices[i] = new Vec3().copyFrom(vertex);
+		}
 
 		_indices = new Vector<Int>(indices.length);
-		for (i in 0...indices.length) _indices[i] = indices[i];
+		for (i in 0...indices.length) {
+			var index:Int = indices[i];
+			if (index < 0 || index >= _numVertices) {
+				throw M.error("StaticMeshGeometry: index " + index + " is out of range");
+			}
+			_indices[i] = index;
+		}
 
 		_normals = new Vector<Vec3>(_numTriangles);
 		if (computeNormals) _computeTriangleNormals();
 		else for (i in 0..._numTriangles) _normals[i] = new Vec3(0,1,0);
 
-		_buildTriangleAABBs();
-		_buildTriangleBVH();
-		_rayCastAabb = new Aabb();
-		_rayCastTriangles = [];
+		_bvh = new StaticMeshBvh(_vertices, _indices, _numTriangles);
 		_updateMass();
 	}
 
+	/**
+	 * Returns the internal vertex array. Do not modify it after construction;
+	 * the static BVH is built from these positions.
+	 */
 	public inline function getVertices():Vector<Vec3> return _vertices;
+
+	/**
+	 * Returns the internal index array. Do not modify it after construction;
+	 * the static BVH is built from these indices.
+	 */
 	public inline function getIndices():Vector<Int> return _indices;
+
 	public inline function getNumTriangles():Int return _numTriangles;
 
 	public function getTriangleVertices(triangleIndex:Int, v1:Vec3, v2:Vec3, v3:Vec3):Void {
@@ -76,8 +98,18 @@ class StaticMeshGeometry extends Geometry {
 	}
 
 	public function queryTrianglesInto(aabb:Aabb, results:Array<Int>):Void {
-		results.resize(0);
-		_queryBVHRecursive(_triangleBVH._root, aabb, results);
+		_bvh.queryTrianglesInto(aabb, results);
+	}
+
+	/**
+	 * Collects triangles whose AABBs are within `radius` of the local-space
+	 * point (`cx`, `cy`, `cz`). The result is conservative; callers must run
+	 * the exact triangle distance test.
+	 */
+	public function queryTrianglesSphereInto(
+		cx:Float, cy:Float, cz:Float, radius:Float, results:Array<Int>
+	):Void {
+		_bvh.queryTrianglesSphereInto(cx, cy, cz, radius, results);
 	}
 
 	/**
@@ -108,102 +140,21 @@ class StaticMeshGeometry extends Geometry {
 		}
 	}
 
-	function _queryBVHRecursive(node:BvhNode, queryAABB:Aabb, results:Array<Int>):Void {
-		if (node == null) return;
-
-		if (!M.aabb_overlap(node._aabbMin, node._aabbMax, queryAABB._min, queryAABB._max)) return;
-
-		if (node._height == 0) {
-			var triangleIndex:Int = cast node._proxy.userData;
-			results.push(triangleIndex);
-		} else {
-			_queryBVHRecursive(node._children[0], queryAABB, results);
-			_queryBVHRecursive(node._children[1], queryAABB, results);
-		}
-	}
-
 	override public function _rayCastLocal(begin:IVec3, end:IVec3, hit:RayCastHit):Bool {
-		var rayDir:IVec3;
-		M.vec3_sub(rayDir, end, begin);
-		var rayLengthSq:Float = M.vec3_dot(rayDir, rayDir);
-		if (rayLengthSq < 1e-12) return false;
-
-		var rayLength:Float = MathUtil.sqrt(rayLengthSq);
-		M.vec3_scale(rayDir, rayDir, 1.0 / rayLength);
-
-		var rayAABB = _rayCastAabb;
-		var beginX = M.vec3_get(begin, 0); var beginY = M.vec3_get(begin, 1); var beginZ = M.vec3_get(begin, 2);
-		var endX = M.vec3_get(end, 0); var endY = M.vec3_get(end, 1); var endZ = M.vec3_get(end, 2);
-		M.vec3_set(rayAABB._min,
-			beginX < endX ? beginX : endX,
-			beginY < endY ? beginY : endY,
-			beginZ < endZ ? beginZ : endZ
+		return _bvh.rayCast(
+			M.vec3_get(begin, 0), M.vec3_get(begin, 1), M.vec3_get(begin, 2),
+			M.vec3_get(end, 0), M.vec3_get(end, 1), M.vec3_get(end, 2),
+			hit
 		);
-		M.vec3_set(rayAABB._max,
-			beginX > endX ? beginX : endX,
-			beginY > endY ? beginY : endY,
-			beginZ > endZ ? beginZ : endZ
-		);
-
-		var triangles:Array<Int> = _rayCastTriangles;
-		queryTrianglesInto(rayAABB, triangles);
-		var closestT:Float = MathUtil.POSITIVE_INFINITY;
-		var closestTriangle:Int = -1;
-
-		for (i in 0...triangles.length) {
-			var triangleIdx = triangles[i];
-			var idx:Int = triangleIdx * 3;
-			var i1:Int = _indices[idx];
-			var i2:Int = _indices[idx + 1];
-			var i3:Int = _indices[idx + 2];
-
-			var v1:IVec3; M.vec3_fromVec3(v1, _vertices[i1]);
-			var v2:IVec3; M.vec3_fromVec3(v2, _vertices[i2]);
-			var v3:IVec3; M.vec3_fromVec3(v3, _vertices[i3]);
-
-			var edge1:IVec3; M.vec3_sub(edge1, v2, v1);
-			var edge2:IVec3; M.vec3_sub(edge2, v3, v1);
-			var h:IVec3; M.vec3_cross(h, rayDir, edge2);
-			var a:Float = M.vec3_dot(edge1, h);
-
-			if (a > -1e-6 && a < 1e-6) continue;
-
-			var f:Float = 1.0 / a;
-			var s:IVec3; M.vec3_sub(s, begin, v1);
-			var u:Float = f * M.vec3_dot(s, h);
-
-			if (u < 0.0 || u > 1.0) continue;
-
-			var q:IVec3; M.vec3_cross(q, s, edge1);
-			var v:Float = f * M.vec3_dot(rayDir, q);
-
-			if (v < 0.0 || u + v > 1.0) continue;
-
-			var t:Float = f * M.vec3_dot(edge2, q);
-
-			if (t > 1e-6 && t <= rayLength && t < closestT) {
-				closestT = t;
-				closestTriangle = triangleIdx;
-			}
-		}
-
-		if (closestTriangle >= 0) {
-			var hitPos:IVec3;
-			M.vec3_addRhsScaled(hitPos, begin, rayDir, closestT);
-
-			var hitNormal:IVec3;
-			M.vec3_fromVec3(hitNormal, _normals[closestTriangle]);
-
-			M.vec3_toVec3(hit.position, hitPos);
-			M.vec3_toVec3(hit.normal, hitNormal);
-			hit.fraction = closestT / rayLength;
-			return true;
-		}
-
-		return false;
 	}
 
 	override public function _updateMass():Void {
+		if (_numVertices == 0) {
+			_volume = 0;
+			M.mat3_diagonal(_inertiaCoeff, 0, 0, 0);
+			return;
+		}
+
 		var minx = MathUtil.POSITIVE_INFINITY; var miny = MathUtil.POSITIVE_INFINITY; var minz = MathUtil.POSITIVE_INFINITY;
 		var maxx = MathUtil.NEGATIVE_INFINITY; var maxy = MathUtil.NEGATIVE_INFINITY; var maxz = MathUtil.NEGATIVE_INFINITY;
 		for (i in 0..._numVertices) {
@@ -222,6 +173,12 @@ class StaticMeshGeometry extends Geometry {
 	}
 
 	override public function _computeAabb(aabb:Aabb, tf:Transform):Void {
+		if (_numVertices == 0) {
+			M.vec3_assign(aabb._min, tf._position);
+			M.vec3_assign(aabb._max, tf._position);
+			return;
+		}
+
 		var minx = MathUtil.POSITIVE_INFINITY; var miny = MathUtil.POSITIVE_INFINITY; var minz = MathUtil.POSITIVE_INFINITY;
 		var maxx = MathUtil.NEGATIVE_INFINITY; var maxy = MathUtil.NEGATIVE_INFINITY; var maxz = MathUtil.NEGATIVE_INFINITY;
 		for (i in 0..._numVertices) {
@@ -239,38 +196,27 @@ class StaticMeshGeometry extends Geometry {
 	function _computeTriangleNormals():Void {
 		for (i in 0..._numTriangles) {
 			var idx = i * 3;
-			var i1 = _indices[idx]; var i2 = _indices[idx + 1]; var i3 = _indices[idx + 2];
-			var v1 = _vertices[i1]; var v2 = _vertices[i2]; var v3 = _vertices[i3];
-			var edge1 = new Vec3().copyFrom(v2).subEq(v1);
-			var edge2 = new Vec3().copyFrom(v3).subEq(v1);
-			var normal = new Vec3().copyFrom(edge1).crossEq(edge2).normalize();
-			_normals[i] = normal;
-		}
-	}
+			var v1 = _vertices[_indices[idx]];
+			var v2 = _vertices[_indices[idx + 1]];
+			var v3 = _vertices[_indices[idx + 2]];
 
-	function _buildTriangleAABBs():Void {
-		_triangleAABBs = new Vector<Aabb>(_numTriangles);
-		for (i in 0..._numTriangles) {
-			var v1 = new Vec3(); var v2 = new Vec3(); var v3 = new Vec3();
-			getTriangleVertices(i, v1, v2, v3);
-			var aabb = new Aabb();
-			var minx = Math.min(v1.x, Math.min(v2.x, v3.x)); var miny = Math.min(v1.y, Math.min(v2.y, v3.y)); var minz = Math.min(v1.z, Math.min(v2.z, v3.z));
-			var maxx = Math.max(v1.x, Math.max(v2.x, v3.x)); var maxy = Math.max(v1.y, Math.max(v2.y, v3.y)); var maxz = Math.max(v1.z, Math.max(v2.z, v3.z));
-			M.vec3_set(aabb._min, minx, miny, minz); M.vec3_set(aabb._max, maxx, maxy, maxz);
-			_triangleAABBs[i] = aabb;
-		}
-	}
+			var e1x = v2.x - v1.x;
+			var e1y = v2.y - v1.y;
+			var e1z = v2.z - v1.z;
+			var e2x = v3.x - v1.x;
+			var e2y = v3.y - v1.y;
+			var e2z = v3.z - v1.z;
 
-	function _buildTriangleBVH():Void {
-		_triangleBVH = new BvhTree();
-		_triangleProxies = new Vector<BvhProxy>(_numTriangles);
-		_nextProxyId = 0;
+			var nx = e1y * e2z - e1z * e2y;
+			var ny = e1z * e2x - e1x * e2z;
+			var nz = e1x * e2y - e1y * e2x;
+			var len = MathUtil.sqrt(nx * nx + ny * ny + nz * nz);
 
-		for (i in 0..._numTriangles) {
-			var proxy = new BvhProxy(i, _nextProxyId++);
-			proxy._setAabb(_triangleAABBs[i]);
-			_triangleBVH._insertProxy(proxy);
-			_triangleProxies[i] = proxy;
+			_normals[i] = new Vec3();
+			if (len > 1e-20) {
+				var invLen = 1.0 / len;
+				_normals[i].init(nx * invLen, ny * invLen, nz * invLen);
+			}
 		}
 	}
 }
