@@ -963,14 +963,6 @@ class World {
 	/**
 	 * Performs a convex overlap query at `transform`. `callback.process` is called
 	 * for all shapes that actually overlap the convex geometry.
-	 *
-	 * The query does not advance the simulation and does not require a rigid body.
-	 * Group and mask filtering is left to the callback.
-	 *
-	 * Static mesh targets use strict positive overlap and ignore the GJK margin
-	 * of convex hulls. Exactly touching shapes are not reported. Other targets
-	 * follow Oimo's narrow-phase contact semantics; use a small overlap or a cast
-	 * when exact contact is required.
 	 */
 	public function convexOverlap(convex:ConvexGeometry, transform:Transform, callback:ConvexOverlapCallback):Void {
 		if (convex == null || transform == null || callback == null) return;
