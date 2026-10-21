@@ -14,7 +14,8 @@ import oimo.m.M;
  * This detector reports the deepest triangle contact for the query shape. It is
  * not a full mesh manifold, so a shape deeply inside a closed mesh can exit
  * through any of the overlapping triangles. Spheres use a closest-point-on-
- * triangle fast path; other convex shapes use GJK/EPA per triangle.
+ * triangle fast path. Capsules use a segment-tight candidate query before the
+ * usual per-triangle GJK/EPA test; other convex shapes use GJK/EPA per triangle.
  */
 @:build(oimo.m.B.bu())
 class ConvexStaticMeshDetector extends Detector {
@@ -36,6 +37,11 @@ class ConvexStaticMeshDetector extends Detector {
 	var sphereCenterLocal:Vec3;
 	var sphereClosestLocal:Vec3;
 	var sphereNormalLocal:Vec3;
+	var capsuleCenterLocal:Vec3;
+	var capsuleAxisLocal:Vec3;
+	var capsuleP0:Vec3;
+	var capsuleP1:Vec3;
+	var capsuleUnitY:Vec3;
 	var bestNormalWorld:Vec3;
 	var bestContactPointConvex:Vec3;
 	var bestContactPointMesh:Vec3;
@@ -61,6 +67,11 @@ class ConvexStaticMeshDetector extends Detector {
 		sphereCenterLocal = new Vec3();
 		sphereClosestLocal = new Vec3();
 		sphereNormalLocal = new Vec3();
+		capsuleCenterLocal = new Vec3();
+		capsuleAxisLocal = new Vec3();
+		capsuleP0 = new Vec3();
+		capsuleP1 = new Vec3();
+		capsuleUnitY = new Vec3(0, 1, 0);
 		bestNormalWorld = new Vec3();
 		bestContactPointConvex = new Vec3();
 		bestContactPointMesh = new Vec3();
@@ -101,10 +112,50 @@ class ConvexStaticMeshDetector extends Detector {
 			return;
 		}
 
-		convex._computeAabb(worldAabb, tf1);
-		staticMesh.worldAabbToLocal(worldAabb, tf2, localAabb);
+		if (convex._type == GeometryType._CAPSULE) {
+			var capsule:CapsuleGeometry = cast convex;
+			if (capsule._halfHeight <= 0) {
+				// A zero-height capsule is a sphere.
+				detectSphere(result, staticMesh, tf1, tf2, margin1, margin2, isQuery);
+				return;
+			}
 
-		staticMesh.queryTrianglesInto(localAabb, indices);
+			// Use a segment-tight candidate query instead of the capsule's
+			// expanded AABB. For a capsule resting near a flat mesh this prunes
+			// the box corners and most of the long axis, which dominates the
+			// cost of large-mesh queries.
+			var centerLocal:Vec3 = capsuleCenterLocal;
+			var axisLocal:Vec3 = capsuleAxisLocal;
+			var p0:Vec3 = capsuleP0;
+			var p1:Vec3 = capsuleP1;
+			var centerRel:IVec3;
+			var centerLocalI:IVec3;
+			M.vec3_sub(centerRel, tf1._position, tf2._position);
+			M.vec3_mulMat3Transposed(centerLocalI, centerRel, tf2._rotation);
+			M.vec3_toVec3(centerLocal, centerLocalI);
+
+			var unitY:IVec3;
+			var axisWorld:IVec3;
+			var axisLocalI:IVec3;
+			M.vec3_fromVec3(unitY, capsuleUnitY);
+			M.vec3_mulMat3(axisWorld, unitY, tf1._rotation);
+			M.vec3_mulMat3Transposed(axisLocalI, axisWorld, tf2._rotation);
+			M.vec3_toVec3(axisLocal, axisLocalI);
+
+			p0.copyFrom(centerLocal).addScaledEq(axisLocal, -capsule._halfHeight);
+			p1.copyFrom(centerLocal).addScaledEq(axisLocal, capsule._halfHeight);
+			staticMesh.queryTrianglesSegmentInto(
+				p0.x, p0.y, p0.z,
+				p1.x, p1.y, p1.z,
+				marginSum, indices
+			);
+		} else {
+			convex._computeAabb(worldAabb, tf1);
+			staticMesh.worldAabbToLocal(worldAabb, tf2, localAabb);
+
+			staticMesh.queryTrianglesInto(localAabb, indices);
+		}
+
 		if (indices.length == 0) {
 			return;
 		}

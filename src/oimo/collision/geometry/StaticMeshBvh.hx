@@ -185,6 +185,72 @@ class StaticMeshBvh {
 	}
 
 	/**
+	 * Collects triangles whose AABBs are within `radius` of the segment
+	 * (`p0`..`p1`). The segment AABB is used as a conservative lower bound:
+	 * it is tighter than expanding the segment AABB by `radius` on every axis,
+	 * especially for a capsule resting near a flat mesh. The caller must still
+	 * perform the exact segment/triangle distance test.
+	 */
+	public function queryTrianglesSegmentInto(
+		p0x:Float, p0y:Float, p0z:Float,
+		p1x:Float, p1y:Float, p1z:Float,
+		radius:Float, results:Array<Int>
+	):Void {
+		if (results == null) return;
+		results.resize(0);
+		if (_root < 0 || !(radius >= 0)) return;
+
+		var segMinX:Float = p0x < p1x ? p0x : p1x;
+		var segMinY:Float = p0y < p1y ? p0y : p1y;
+		var segMinZ:Float = p0z < p1z ? p0z : p1z;
+		var segMaxX:Float = p0x > p1x ? p0x : p1x;
+		var segMaxY:Float = p0y > p1y ? p0y : p1y;
+		var segMaxZ:Float = p0z > p1z ? p0z : p1z;
+		var radiusSq:Float = radius * radius;
+
+		var stack:Vector<Int> = _queryStack;
+		var stackSize:Int = 0;
+		stack[stackSize] = _root;
+		stackSize++;
+
+		while (stackSize > 0) {
+			stackSize--;
+			var node:Int = stack[stackSize];
+			var b:Int = node * 6;
+
+			var dx:Float = _intervalDistance(segMinX, segMaxX, _bounds[b], _bounds[b + 3]);
+			var dy:Float = _intervalDistance(segMinY, segMaxY, _bounds[b + 1], _bounds[b + 4]);
+			var dz:Float = _intervalDistance(segMinZ, segMaxZ, _bounds[b + 2], _bounds[b + 5]);
+			if (dx * dx + dy * dy + dz * dz > radiusSq) continue;
+
+			var l:Int = node * 4;
+			var count:Int = _links[l + 3];
+			if (count > 0) {
+				var start:Int = _links[l + 2];
+				for (i in 0...count) {
+					var triangle:Int = _order[start + i];
+					var tb:Int = triangle * 6;
+					var tdx:Float = _intervalDistance(segMinX, segMaxX, _triangleBounds[tb], _triangleBounds[tb + 3]);
+					var tdy:Float = _intervalDistance(segMinY, segMaxY, _triangleBounds[tb + 1], _triangleBounds[tb + 4]);
+					var tdz:Float = _intervalDistance(segMinZ, segMaxZ, _triangleBounds[tb + 2], _triangleBounds[tb + 5]);
+					if (tdx * tdx + tdy * tdy + tdz * tdz <= radiusSq) {
+						results.push(triangle);
+					}
+				}
+			} else {
+				stack[stackSize] = _links[l];
+				stackSize++;
+				stack[stackSize] = _links[l + 1];
+				stackSize++;
+			}
+		}
+	}
+
+	inline function _intervalDistance(aMin:Float, aMax:Float, bMin:Float, bMax:Float):Float {
+		return aMax < bMin ? bMin - aMax : (bMax < aMin ? aMin - bMax : 0);
+	}
+
+	/**
 	 * Raycasts against the mesh in local space. `begin`/`end` are local
 	 * coordinates. Returns `true` and fills `hit` on a hit.
 	 *

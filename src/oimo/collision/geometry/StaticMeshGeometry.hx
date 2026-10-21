@@ -113,6 +113,19 @@ class StaticMeshGeometry extends Geometry {
 	}
 
 	/**
+	 * Collects triangles whose AABBs are within `radius` of the local-space
+	 * segment (`p0`..`p1`). The result is conservative; callers must run the
+	 * exact segment/triangle distance test.
+	 */
+	public function queryTrianglesSegmentInto(
+		p0x:Float, p0y:Float, p0z:Float,
+		p1x:Float, p1y:Float, p1z:Float,
+		radius:Float, results:Array<Int>
+	):Void {
+		_bvh.queryTrianglesSegmentInto(p0x, p0y, p0z, p1x, p1y, p1z, radius, results);
+	}
+
+	/**
 	 * Transforms the world-space AABB `worldAabb` into this mesh's local space and
 	 * stores the result in `localAabb`.
 	 */
