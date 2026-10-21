@@ -48,12 +48,19 @@ class ConvexCastResolver {
 
 	public function prepare(convex:ConvexGeometry, begin:Transform, translation:Vec3):Void {
 		this.convex = convex;
+		if (begin == null || translation == null) {
+			this.convex = null;
+			sweptAabbReady = false;
+			return;
+		}
 		this.begin.copyFrom(begin);
 		this.translation.copyFrom(translation);
 		sweptAabbReady = false;
 	}
 
 	public function resolve(target:Geometry, targetTransform:Transform, hit:RayCastHit):Bool {
+		if (convex == null || target == null || targetTransform == null || hit == null) return false;
+
 		var type:Int = target._type;
 
 		if (type == GeometryType._STATIC_MESH) {
@@ -66,6 +73,18 @@ class ConvexCastResolver {
 	}
 
 	function castStaticMesh(staticMesh:StaticMeshGeometry, meshTransform:Transform, hit:RayCastHit):Bool {
+		if (convex == null || staticMesh == null || meshTransform == null || hit == null) return false;
+
+		// A hull's support points are not shrunk by its GJK margin, unlike the
+		// primitives. Casting with the margin therefore reports a hit before the
+		// hull actually touches the mesh. Suppress it only for this mesh cast.
+		var restoreHullMargin:Bool = convex._type == GeometryType._CONVEX_HULL && convex._gjkMargin != 0;
+		var hullMargin:Float = 0;
+		if (restoreHullMargin) {
+			hullMargin = convex._gjkMargin;
+			convex._gjkMargin = 0;
+		}
+
 		if (!sweptAabbReady) {
 			convex._computeAabb(sweptAabb, begin);
 
@@ -88,7 +107,10 @@ class ConvexCastResolver {
 		staticMesh.worldAabbToLocal(sweptAabb, meshTransform, localAabb);
 
 		staticMesh.queryTrianglesInto(localAabb, triangles);
-		if (triangles.length == 0) return false;
+		if (triangles.length == 0) {
+			if (restoreHullMargin) convex._gjkMargin = hullMargin;
+			return false;
+		}
 
 		var gjkEpa:GjkEpa = GjkEpa.getInstance();
 		var bestFraction:Float = MathUtil.POSITIVE_INFINITY;
@@ -97,8 +119,12 @@ class ConvexCastResolver {
 		for (i in 0...triangles.length) {
 			staticMesh.getTriangleVertices(triangles[i], triangleVertices[0], triangleVertices[1], triangleVertices[2]);
 
-			edge1.copyFrom(triangleVertices[1]).subEq(triangleVertices[0]);
-			edge2.copyFrom(triangleVertices[2]).subEq(triangleVertices[0]);
+			var v1:Vec3 = triangleVertices[0];
+			var v2:Vec3 = triangleVertices[1];
+			var v3:Vec3 = triangleVertices[2];
+
+			edge1.copyFrom(v2).subEq(v1);
+			edge2.copyFrom(v3).subEq(v1);
 			if (edge1.crossEq(edge2).lengthSq() < 1e-12) continue;
 
 			if (gjkEpa.convexCast(convex, triangleGeom, begin, meshTransform, translation, zero, triangleHit)) {
@@ -107,9 +133,14 @@ class ConvexCastResolver {
 					hit.position.copyFrom(triangleHit.position);
 					hit.normal.copyFrom(triangleHit.normal);
 					found = true;
+
+					// No other triangle can be hit earlier.
+					if (bestFraction <= 0) break;
 				}
 			}
 		}
+
+		if (restoreHullMargin) convex._gjkMargin = hullMargin;
 
 		if (!found) return false;
 		hit.fraction = bestFraction;

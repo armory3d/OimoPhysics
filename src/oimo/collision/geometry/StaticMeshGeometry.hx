@@ -24,6 +24,11 @@ class StaticMeshGeometry extends Geometry {
 	var _triangleProxies:Vector<BvhProxy>;
 	var _nextProxyId:Int;
 
+	// Scratch data for mesh raycasts. Oimo queries are not reentrant, so the
+	// same buffers can be reused for every raycast.
+	var _rayCastAabb:Aabb;
+	var _rayCastTriangles:Array<Int>;
+
 	public function new(vertices:Array<Vec3>, indices:Array<Int>, computeNormals:Bool = true) {
 		super(GeometryType._STATIC_MESH);
 		_numVertices = vertices.length;
@@ -41,6 +46,8 @@ class StaticMeshGeometry extends Geometry {
 
 		_buildTriangleAABBs();
 		_buildTriangleBVH();
+		_rayCastAabb = new Aabb();
+		_rayCastTriangles = [];
 		_updateMass();
 	}
 
@@ -124,7 +131,7 @@ class StaticMeshGeometry extends Geometry {
 		var rayLength:Float = MathUtil.sqrt(rayLengthSq);
 		M.vec3_scale(rayDir, rayDir, 1.0 / rayLength);
 
-		var rayAABB = new Aabb();
+		var rayAABB = _rayCastAabb;
 		var beginX = M.vec3_get(begin, 0); var beginY = M.vec3_get(begin, 1); var beginZ = M.vec3_get(begin, 2);
 		var endX = M.vec3_get(end, 0); var endY = M.vec3_get(end, 1); var endZ = M.vec3_get(end, 2);
 		M.vec3_set(rayAABB._min,
@@ -138,7 +145,8 @@ class StaticMeshGeometry extends Geometry {
 			beginZ > endZ ? beginZ : endZ
 		);
 
-		var triangles:Array<Int> = queryTriangles(rayAABB);
+		var triangles:Array<Int> = _rayCastTriangles;
+		queryTrianglesInto(rayAABB, triangles);
 		var closestT:Float = MathUtil.POSITIVE_INFINITY;
 		var closestTriangle:Int = -1;
 

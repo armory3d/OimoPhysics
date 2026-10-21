@@ -6,6 +6,8 @@ import oimo.collision.broadphase.bruteforce.*;
 import oimo.collision.broadphase.bvh.*;
 import oimo.collision.geometry.*;
 import oimo.collision.narrowphase.ConvexCastResolver;
+import oimo.collision.narrowphase.ConvexOverlapHit;
+import oimo.collision.narrowphase.ConvexOverlapResolver;
 import oimo.common.*;
 import oimo.dynamics.callback.*;
 import oimo.dynamics.common.*;
@@ -50,6 +52,7 @@ class World {
 
 	var _rayCastWrapper:RayCastWrapper;
 	var _convexCastWrapper:ConvexCastWrapper;
+	var _convexOverlapWrapper:ConvexOverlapWrapper;
 	var _aabbTestWrapper:AabbTestWrapper;
 
 	var _pool:Pool;
@@ -89,6 +92,7 @@ class World {
 
 		_rayCastWrapper = new RayCastWrapper();
 		_convexCastWrapper = new ConvexCastWrapper();
+		_convexOverlapWrapper = new ConvexOverlapWrapper();
 		_aabbTestWrapper = new AabbTestWrapper();
 
 		_island = new Island();
@@ -949,9 +953,31 @@ class World {
 	 * transform `begin`.
 	 */
 	public function convexCast(convex:ConvexGeometry, begin:Transform, translation:Vec3, callback:RayCastCallback):Void {
+		if (convex == null || begin == null || translation == null || callback == null) return;
+
 		_convexCastWrapper.prepare(convex, begin, translation, callback);
 
 		_broadPhase.convexCast(convex, begin, translation, _convexCastWrapper);
+	}
+
+	/**
+	 * Performs a convex overlap query at `transform`. `callback.process` is called
+	 * for all shapes that actually overlap the convex geometry.
+	 *
+	 * The query does not advance the simulation and does not require a rigid body.
+	 * Group and mask filtering is left to the callback.
+	 *
+	 * Static mesh targets use strict positive overlap and ignore the GJK margin
+	 * of convex hulls. Exactly touching shapes are not reported. Other targets
+	 * follow Oimo's narrow-phase contact semantics; use a small overlap or a cast
+	 * when exact contact is required.
+	 */
+	public function convexOverlap(convex:ConvexGeometry, transform:Transform, callback:ConvexOverlapCallback):Void {
+		if (convex == null || transform == null || callback == null) return;
+
+		_convexOverlapWrapper.prepare(convex, transform, callback);
+
+		_broadPhase.aabbTest(_convexOverlapWrapper.aabb, _convexOverlapWrapper);
 	}
 
 	/**
@@ -1114,6 +1140,41 @@ private class ConvexCastWrapper extends BroadPhaseProxyCallback {
 		var shape:Shape = cast proxy.userData;
 		if (resolver.resolve(shape._geom, shape._transform, rayCastHit)) {
 			callback.process(shape, rayCastHit);
+		}
+	}
+}
+
+// convex overlap wrapper (broadphase -> world)
+private class ConvexOverlapWrapper extends BroadPhaseProxyCallback {
+	public var aabb:Aabb;
+
+	var callback:ConvexOverlapCallback;
+	var resolver:ConvexOverlapResolver;
+	var hit:ConvexOverlapHit;
+
+	public function new() {
+		super();
+
+		aabb = new Aabb();
+		callback = null;
+		resolver = new ConvexOverlapResolver();
+		hit = new ConvexOverlapHit();
+	}
+
+	public function prepare(convex:ConvexGeometry, transform:Transform, callback:ConvexOverlapCallback):Void {
+		this.callback = callback;
+		resolver.prepare(convex, transform);
+		convex._computeAabb(aabb, transform);
+	}
+
+	override public function process(proxy:Proxy):Void {
+		var shape:Shape = cast proxy.userData;
+
+		// The broadphase uses fat AABBs, so check the exact query AABB first.
+		if (!M.aabb_overlap(shape._aabb._min, shape._aabb._max, aabb._min, aabb._max)) return;
+
+		if (resolver.resolve(shape._geom, shape._transform, hit)) {
+			callback.process(shape, hit);
 		}
 	}
 }
