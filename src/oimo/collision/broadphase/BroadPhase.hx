@@ -27,10 +27,9 @@ class BroadPhase {
 	var _proxyPairPool:ProxyPair;
 	var _idCount:Int;
 
-	var _convexSweep:ConvexSweepGeometry;
-	var _aabb:AabbGeometry;
+	var _sweepAabb:Array<Aabb>;
+	var _sweepTransform:Transform;
 
-	var identity:Transform;
 	var zero:Vec3;
 	var rayCastHit:RayCastHit;
 
@@ -50,10 +49,9 @@ class BroadPhase {
 		_proxyPairPool = null;
 		_idCount = 0;
 
-		_convexSweep = new ConvexSweepGeometry();
-		_aabb = new AabbGeometry();
+		_sweepAabb = [new Aabb(), new Aabb()];
+		_sweepTransform = new Transform();
 
-		identity = new Transform();
 		zero = new Vec3();
 		rayCastHit = new RayCastHit();
 	}
@@ -162,15 +160,41 @@ class BroadPhase {
 		return true;
 	}
 
+	/**
+	 * Conservative swept-AABB cull: the query box is the union of the convex's AABBs
+	 * at the begin and end transforms. Same idea as Bullet Physics convex-vs-concave
+	 * sweep, implemented here with OimoPhysics' own AABB helpers. Assumes constant
+	 * rotation during the sweep, like Bullet; a rotating sweep can escape the union.
+	 * Callers still run the exact narrow-phase test on every candidate.
+	**/
 	extern inline function aabbConvexSweepTest(aabbMin:IVec3, aabbMax:IVec3, convex:ConvexGeometry, begin:Transform, translation:Vec3):Bool {
-		M.vec3_toVec3(_aabb.min, aabbMin);
-		M.vec3_toVec3(_aabb.max, aabbMax);
-		_convexSweep.init(convex, begin, translation);
-		var gjkEpa:GjkEpa = GjkEpa.getInstance();
-		if (gjkEpa.computeDistance(_convexSweep, _aabb, begin, identity, null) == GjkEpaResultState._SUCCEEDED) {
-			return gjkEpa.distance <= 0;
-		}
-		return false;
+		var beginAabb:Aabb = _sweepAabb[0];
+		var endAabb:Aabb = _sweepAabb[1];
+
+		var tl:IVec3;
+		M.vec3_fromVec3(tl, translation);
+
+		convex._computeAabb(beginAabb, begin);
+
+		var endTransform:Transform = _sweepTransform;
+		M.mat3_assign(endTransform._rotation, begin._rotation);
+		M.vec3_add(endTransform._position, begin._position, tl);
+		convex._computeAabb(endAabb, endTransform);
+
+		// Union of the begin and end AABBs: the conservative swept box.
+		var bmin:IVec3;
+		var bmax:IVec3;
+		M.vec3_min(bmin, beginAabb._min, endAabb._min);
+		M.vec3_max(bmax, beginAabb._max, endAabb._max);
+
+		// Overlap test; separated on any axis means "no possible hit".
+		if (M.vec3_get(aabbMax, 0) < M.vec3_get(bmin, 0)) return false;
+		if (M.vec3_get(aabbMin, 0) > M.vec3_get(bmax, 0)) return false;
+		if (M.vec3_get(aabbMax, 1) < M.vec3_get(bmin, 1)) return false;
+		if (M.vec3_get(aabbMin, 1) > M.vec3_get(bmax, 1)) return false;
+		if (M.vec3_get(aabbMax, 2) < M.vec3_get(bmin, 2)) return false;
+		if (M.vec3_get(aabbMin, 2) > M.vec3_get(bmax, 2)) return false;
+		return true;
 	}
 
 	// --- public ---
