@@ -16,6 +16,10 @@ import oimo.m.M;
  * through any of the overlapping triangles. Spheres use a closest-point-on-
  * triangle fast path. Capsules use a segment-tight candidate query before the
  * usual per-triangle GJK/EPA test; other convex shapes use GJK/EPA per triangle.
+ *
+ * The split between candidate selection and exact per-triangle testing is the
+ * same one Bullet Physics uses for convex-vs-concave shapes (cull triangles, then test
+ * each one).
  */
 @:build(oimo.m.B.bu())
 class ConvexStaticMeshDetector extends Detector {
