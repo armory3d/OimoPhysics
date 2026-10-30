@@ -6,8 +6,7 @@ import oimo.collision.broadphase.bruteforce.*;
 import oimo.collision.broadphase.bvh.*;
 import oimo.collision.geometry.*;
 import oimo.collision.narrowphase.ConvexCastResolver;
-import oimo.collision.narrowphase.ConvexOverlapHit;
-import oimo.collision.narrowphase.ConvexOverlapResolver;
+import oimo.collision.narrowphase.detector.gjkepa.*;
 import oimo.common.*;
 import oimo.dynamics.callback.*;
 import oimo.dynamics.common.*;
@@ -209,6 +208,7 @@ class World {
 				var cc:ContactConstraint = cl._contact._contactConstraint;
 				var ccs:ConstraintSolver = cl._contact._contactConstraint._solver;
 				if (!cl._contact._triggering && cc.isTouching() && !ccs._addedToIsland) {
+
 					// add to constraint array (to clear island flag later)
 					if (_solversInIslands.length == _numSolversInIslands) {
 						M.array_expand(_solversInIslands, _numSolversInIslands);
@@ -702,12 +702,12 @@ class World {
 		var rylm:RotationalLimitMotor = j._rotLms[1];
 		var rzlm:RotationalLimitMotor = j._rotLms[2];
 		_drawTranslationalLimit3D(d, anchor1, basisX1, basisY1, basisZ1, txlm, tylm, tzlm, color);
-
+		
 		var rotYAxis:Vec3 = _pool.vec3();
 		M.vec3_toVec3(rotYAxis, j._axisY);
 		var rotYBasisX:Vec3 = _pool.vec3().copyFrom(basisX1);
 		var rotYBasisY:Vec3 = _pool.vec3().copyFrom(basisX1).crossEq(rotYAxis);
-
+		
 		_drawRotationalLimit(d, anchor2, basisY1, basisZ1, basisY1, radius, j._angleX - rxlm.upperLimit, j._angleX - rxlm.lowerLimit, color);
 		_drawRotationalLimit(d, anchor2, rotYBasisX, rotYBasisY, rotYBasisX, radius, rylm.lowerLimit - j._angleY, rylm.upperLimit - j._angleY, color);
 		_drawRotationalLimit(d, anchor2, basisX2, basisY2, basisX2, radius, rzlm.lowerLimit - j._angleZ, rzlm.upperLimit - j._angleZ, color);
@@ -951,11 +951,15 @@ class World {
 	 * Performs a convex casting. `callback.process` is called for all shapes the convex geometry
 	 * `convex` hits. The convex geometry translates by `translation` starting from the beginning
 	 * transform `begin`.
+	 *
+	 * A static mesh calls `callback.process` once per triangle hit, with the triangle in
+	 * `RayCastHit.triangleIndex`. Shapes the convex already overlaps at `begin` are not reported.
 	 */
 	public function convexCast(convex:ConvexGeometry, begin:Transform, translation:Vec3, callback:RayCastCallback):Void {
-		if (convex == null || begin == null || translation == null || callback == null) return;
-
-		_convexCastWrapper.prepare(convex, begin, translation, callback);
+		_convexCastWrapper.convex = convex;
+		_convexCastWrapper.begin.copyFrom(begin);
+		_convexCastWrapper.translation.copyFrom(translation);
+		_convexCastWrapper.callback = callback;
 
 		_broadPhase.convexCast(convex, begin, translation, _convexCastWrapper);
 	}
@@ -963,10 +967,11 @@ class World {
 	/**
 	 * Performs a convex overlap query at `transform`. `callback.process` is called
 	 * for all shapes that actually overlap the convex geometry.
+	 *
+	 * A static mesh calls `callback.process` once per overlapping triangle, with the
+	 * triangle in `ConvexOverlapHit.triangleIndex`.
 	 */
 	public function convexOverlap(convex:ConvexGeometry, transform:Transform, callback:ConvexOverlapCallback):Void {
-		if (convex == null || transform == null || callback == null) return;
-
 		_convexOverlapWrapper.prepare(convex, transform, callback);
 
 		_broadPhase.aabbTest(_convexOverlapWrapper.aabb, _convexOverlapWrapper);
@@ -1111,62 +1116,29 @@ private class RayCastWrapper extends BroadPhaseProxyCallback {
 
 // convex cast wrapper (broadphase -> world)
 private class ConvexCastWrapper extends BroadPhaseProxyCallback {
-	var callback:RayCastCallback;
+	public var callback:RayCastCallback;
+	public var begin:Transform;
+	public var translation:Vec3;
+	public var convex:ConvexGeometry;
 
 	var resolver:ConvexCastResolver;
-	var rayCastHit:RayCastHit;
 
 	public function new() {
 		super();
 		resolver = new ConvexCastResolver();
-		rayCastHit = new RayCastHit();
-		callback = null;
-	}
 
-	public function prepare(convex:ConvexGeometry, begin:Transform, translation:Vec3, callback:RayCastCallback):Void {
-		this.callback = callback;
-		resolver.prepare(convex, begin, translation);
+		begin = new Transform();
+		translation = new Vec3();
+		callback = null;
+		convex = null;
 	}
 
 	override public function process(proxy:Proxy):Void {
 		var shape:Shape = cast proxy.userData;
-		if (resolver.resolve(shape._geom, shape._transform, rayCastHit)) {
-			callback.process(shape, rayCastHit);
-		}
-	}
-}
-
-// convex overlap wrapper (broadphase -> world)
-private class ConvexOverlapWrapper extends BroadPhaseProxyCallback {
-	public var aabb:Aabb;
-
-	var callback:ConvexOverlapCallback;
-	var resolver:ConvexOverlapResolver;
-	var hit:ConvexOverlapHit;
-
-	public function new() {
-		super();
-
-		aabb = new Aabb();
-		callback = null;
-		resolver = new ConvexOverlapResolver();
-		hit = new ConvexOverlapHit();
-	}
-
-	public function prepare(convex:ConvexGeometry, transform:Transform, callback:ConvexOverlapCallback):Void {
-		this.callback = callback;
-		resolver.prepare(convex, transform);
-		convex._computeAabb(aabb, transform);
-	}
-
-	override public function process(proxy:Proxy):Void {
-		var shape:Shape = cast proxy.userData;
-
-		// The broadphase uses fat AABBs, so check the exact query AABB first.
-		if (!M.aabb_overlap(shape._aabb._min, shape._aabb._max, aabb._min, aabb._max)) return;
-
-		if (resolver.resolve(shape._geom, shape._transform, hit)) {
-			callback.process(shape, hit);
+		// A static mesh reports one hit per triangle.
+		var numHits:Int = resolver.resolve(convex, begin, translation, shape._geom, shape._transform);
+		for (i in 0...numHits) {
+			callback.process(shape, resolver.getHit(i));
 		}
 	}
 }

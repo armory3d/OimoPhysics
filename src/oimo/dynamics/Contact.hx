@@ -205,7 +205,8 @@ class Contact {
 		var result:DetectorResult = _detectorResult;
 		_detector.detect(result, _s1._geom, _s2._geom, _s1._transform, _s2._transform, _cachedDetectorData);
 
-		_touching = result.numPoints > 0;
+		var num:Int = result.numPoints;
+		_touching = num > 0;
 		_triggering = _touching && (_s1._isTrigger || _s2._isTrigger);
 
 		if (_touching) {

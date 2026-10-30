@@ -11,8 +11,9 @@ import oimo.m.M;
 /**
  * ConvexGeometry vs StaticMeshGeometry collision detector.
  *
- * This detector reports the deepest triangle contact for the query shape. It is
- * not a full mesh manifold, so a shape deeply inside a closed mesh can exit
+ * Contacts (and `detect`) report the deepest triangle contact; `detectAll`
+ * reports one contact per overlapping triangle, for queries. Neither is a full
+ * mesh manifold, so a shape deeply inside a closed mesh can exit
  * through any of the overlapping triangles. Spheres use a closest-point-on-
  * triangle fast path. Capsules use a segment-tight candidate query before the
  * usual per-triangle GJK/EPA test; other convex shapes use GJK/EPA per triangle.
@@ -26,6 +27,16 @@ class ConvexStaticMeshDetector extends Detector {
 	static inline var QUERY_DEPTH_EPSILON:Float = 1e-6;
 
 	var queryMode:Bool;
+
+	// Where triangle contacts go: the deepest is kept, or with `collectAll`
+	// (`detectAll`) every one is appended to `contacts`.
+	var collectAll:Bool;
+	var contacts:Array<ConvexOverlapHit>;
+	var numContacts:Int;
+	var collectResult:DetectorResult;
+	var currentTriangle:Int;
+	var bestDepth:Float;
+	var bestFound:Bool;
 
 	// Scratch data. Static-mesh detection is frequent enough that allocating
 	// these per triangle is measurable in both contacts and queries.
@@ -49,6 +60,9 @@ class ConvexStaticMeshDetector extends Detector {
 	var bestNormalWorld:Vec3;
 	var bestContactPointConvex:Vec3;
 	var bestContactPointMesh:Vec3;
+	var candidateNormal:Vec3;
+	var candidatePointConvex:Vec3;
+	var candidatePointMesh:Vec3;
 
 	/**
 	 * `queryMode` enables strict positive-overlap semantics for convex overlap
@@ -57,6 +71,14 @@ class ConvexStaticMeshDetector extends Detector {
 	public function new(swapped:Bool = false, queryMode:Bool = false) {
 		super(swapped);
 		this.queryMode = queryMode;
+
+		collectAll = false;
+		contacts = [new ConvexOverlapHit()];
+		numContacts = 0;
+		collectResult = new DetectorResult();
+		currentTriangle = -1;
+		bestDepth = 0;
+		bestFound = false;
 
 		triangleIndices = [];
 		worldAabb = new Aabb();
@@ -79,6 +101,53 @@ class ConvexStaticMeshDetector extends Detector {
 		bestNormalWorld = new Vec3();
 		bestContactPointConvex = new Vec3();
 		bestContactPointMesh = new Vec3();
+		candidateNormal = new Vec3();
+		candidatePointConvex = new Vec3();
+		candidatePointMesh = new Vec3();
+	}
+
+	/**
+	 * Query mode only: finds one contact per triangle of `staticMesh` that
+	 * `convex` overlaps, with the normal pointing from the triangle towards the
+	 * convex. Returns the number of contacts; read them with `getContact`. They
+	 * stay valid until the next call.
+	 */
+	public function detectAll(convex:ConvexGeometry, staticMesh:StaticMeshGeometry, convexTransform:Transform, meshTransform:Transform):Int {
+		numContacts = 0;
+		if (!queryMode || swapped) return 0;
+		collectAll = true;
+		collectResult.clear();
+		try {
+			detectImpl(collectResult, convex, staticMesh, convexTransform, meshTransform, null);
+		} catch (e:Dynamic) {
+			collectAll = false;
+			throw e;
+		}
+		collectAll = false;
+		return numContacts;
+	}
+
+	public inline function getContact(index:Int):ConvexOverlapHit {
+		return contacts[index];
+	}
+
+	// Whether a contact of this depth would be kept; lets callers skip building it.
+	inline function wants(depth:Float):Bool {
+		return collectAll || !bestFound || depth > bestDepth;
+	}
+
+	// Takes the candidate contact of `currentTriangle`.
+	function report(depth:Float):Void {
+		if (collectAll) {
+			if (numContacts == contacts.length) contacts.push(new ConvexOverlapHit());
+			contacts[numContacts++].setSingle(candidateNormal, candidatePointConvex, candidatePointMesh, depth, currentTriangle);
+			return;
+		}
+		bestNormalWorld.copyFrom(candidateNormal);
+		bestContactPointConvex.copyFrom(candidatePointConvex);
+		bestContactPointMesh.copyFrom(candidatePointMesh);
+		bestDepth = depth;
+		bestFound = true;
 	}
 
 	override function detectImpl(result:DetectorResult, geom1:Geometry, geom2:Geometry, tf1:Transform, tf2:Transform, cachedData:CachedDetectorData):Void {
@@ -94,12 +163,10 @@ class ConvexStaticMeshDetector extends Detector {
 		var edge2:Vec3 = this.edge2;
 		var toConvex:Vec3 = this.toConvex;
 		var meshPoint:Vec3 = this.meshPoint;
-		var bestNormal:Vec3 = bestNormalWorld;
-		var bestPointConvex:Vec3 = bestContactPointConvex;
-		var bestPointMesh:Vec3 = bestContactPointMesh;
 		var isQuery:Bool = queryMode;
 
 		result.incremental = false;
+		bestFound = false;
 
 		var margin1:Float = convex._gjkMargin;
 		if (isQuery && convex._type == GeometryType._CONVEX_HULL) {
@@ -164,12 +231,14 @@ class ConvexStaticMeshDetector extends Detector {
 			return;
 		}
 
-		var bestPenetrationDepth:Float = MathUtil.NEGATIVE_INFINITY;
-		var bestContactFound:Bool = false;
+		var candNormal:Vec3 = candidateNormal;
+		var candPointConvex:Vec3 = candidatePointConvex;
+		var candPointMesh:Vec3 = candidatePointMesh;
 
 		var gjkEpa:GjkEpa = GjkEpa.getInstance();
 
 		for (triangleIndex in indices) {
+			currentTriangle = triangleIndex;
 			staticMesh.getTriangleVertices(triangleIndex, triVertices[0], triVertices[1], triVertices[2]);
 
 			var v1:Vec3 = triVertices[0];
@@ -212,7 +281,7 @@ class ConvexStaticMeshDetector extends Detector {
 				continue;
 			}
 
-			if (penetrationDepth > bestPenetrationDepth) {
+			if (wants(penetrationDepth)) {
 				if (distanceFallback) {
 					// Build a stable world-space triangle normal and orient it
 					// from the mesh toward the query center.
@@ -229,30 +298,29 @@ class ConvexStaticMeshDetector extends Detector {
 
 					M.vec3_fromVec3(normalLocal, edge1);
 					M.vec3_mulMat3(normalWorld, normalLocal, tf2._rotation);
-					M.vec3_toVec3(bestNormal, normalWorld);
-					if (bestNormal.dot(toConvex) < 0) {
-						bestNormal.negateEq();
+					M.vec3_toVec3(candNormal, normalWorld);
+					if (candNormal.dot(toConvex) < 0) {
+						candNormal.negateEq();
 					}
 
-					if (bestNormal.lengthSq() < 1e-12) {
+					if (candNormal.lengthSq() < 1e-12) {
 						continue;
 					}
-					bestNormal.normalize();
+					candNormal.normalize();
 
-					bestPenetrationDepth = penetrationDepth;
-					bestContactFound = true;
-					M.vec3_toVec3(bestPointConvex, tf1._position);
-					bestPointConvex.addScaledEq(bestNormal, -margin1);
-					M.vec3_toVec3(bestPointMesh, tf1._position);
+					M.vec3_toVec3(candPointConvex, tf1._position);
+					candPointConvex.addScaledEq(candNormal, -margin1);
+					M.vec3_toVec3(candPointMesh, tf1._position);
+					report(penetrationDepth);
 					continue;
 				}
 
-				bestNormal.copyFrom(gjkEpa.closestPoint1).subEq(gjkEpa.closestPoint2);
+				candNormal.copyFrom(gjkEpa.closestPoint1).subEq(gjkEpa.closestPoint2);
 				if (distance < 0) {
-					bestNormal.negateEq();
+					candNormal.negateEq();
 				}
 
-				if (bestNormal.lengthSq() < 1e-12) {
+				if (candNormal.lengthSq() < 1e-12) {
 					// GJK can produce coincident witness points for degenerate
 					// configurations. Use the geometric triangle normal, transformed
 					// to world space and oriented from the mesh toward the query.
@@ -260,32 +328,29 @@ class ConvexStaticMeshDetector extends Detector {
 					var normalWorld:IVec3;
 					M.vec3_fromVec3(normalLocal, edge1);
 					M.vec3_mulMat3(normalWorld, normalLocal, tf2._rotation);
-					M.vec3_toVec3(bestNormal, normalWorld);
+					M.vec3_toVec3(candNormal, normalWorld);
 					M.vec3_toVec3(toConvex, tf1._position);
 					toConvex.subEq(gjkEpa.closestPoint2);
-					if (bestNormal.dot(toConvex) < 0) {
-						bestNormal.negateEq();
+					if (candNormal.dot(toConvex) < 0) {
+						candNormal.negateEq();
 					}
 				}
 
-				if (bestNormal.lengthSq() < 1e-12) {
+				if (candNormal.lengthSq() < 1e-12) {
 					continue;
 				}
-				bestNormal.normalize();
+				candNormal.normalize();
 
-				bestPenetrationDepth = penetrationDepth;
-				bestContactFound = true;
-				bestPointConvex.copyFrom(gjkEpa.closestPoint1).addScaledEq(bestNormal, -margin1);
-				bestPointMesh.copyFrom(gjkEpa.closestPoint2).addScaledEq(bestNormal, margin2);
+				candPointConvex.copyFrom(gjkEpa.closestPoint1).addScaledEq(candNormal, -margin1);
+				candPointMesh.copyFrom(gjkEpa.closestPoint2).addScaledEq(candNormal, margin2);
+				report(penetrationDepth);
 			}
 		}
 
-		if (bestContactFound) {
-			setBestContact(result, bestPenetrationDepth);
-		}
+		if (bestFound) setBestContact(result);
 	}
 
-	function setBestContact(result:DetectorResult, depth:Float):Void {
+	function setBestContact(result:DetectorResult):Void {
 		var normalInWorld:IVec3;
 		var contactPointConvex:IVec3;
 		var contactPointMesh:IVec3;
@@ -294,7 +359,7 @@ class ConvexStaticMeshDetector extends Detector {
 		M.vec3_fromVec3(contactPointMesh, bestContactPointMesh);
 
 		M.call(setNormal(result, normalInWorld));
-		M.call(addPoint(result, contactPointConvex, contactPointMesh, depth, 0));
+		M.call(addPoint(result, contactPointConvex, contactPointMesh, bestDepth, 0));
 	}
 
 	function detectSphere(
@@ -311,9 +376,6 @@ class ConvexStaticMeshDetector extends Detector {
 		var centerLocal:Vec3 = sphereCenterLocal;
 		var closestLocal:Vec3 = sphereClosestLocal;
 		var normalLocal:Vec3 = sphereNormalLocal;
-		var bestNormal:Vec3 = bestNormalWorld;
-		var bestPointConvex:Vec3 = bestContactPointConvex;
-		var bestPointMesh:Vec3 = bestContactPointMesh;
 
 		// Work in mesh-local space: the sphere core is its center.
 		var centerRel:IVec3;
@@ -334,10 +396,8 @@ class ConvexStaticMeshDetector extends Detector {
 		var marginSum:Float = margin1 + margin2;
 		var marginSq:Float = marginSum * marginSum;
 
-		var bestDepth:Float = MathUtil.NEGATIVE_INFINITY;
-		var found:Bool = false;
-
 		for (triangleIndex in indices) {
+			currentTriangle = triangleIndex;
 			var vertexIndex:Int = triangleIndex * 3;
 			var v1:Vec3 = meshVertices[meshIndices[vertexIndex]];
 			var v2:Vec3 = meshVertices[meshIndices[vertexIndex + 1]];
@@ -392,36 +452,33 @@ class ConvexStaticMeshDetector extends Detector {
 				);
 			}
 
-			if (depth > bestDepth) {
+			if (wants(depth)) {
 				var normalWorld:IVec3;
 				var normalLocalI:IVec3;
 				M.vec3_fromVec3(normalLocalI, normalLocal);
 				M.vec3_mulMat3(normalWorld, normalLocalI, tf2._rotation);
-				M.vec3_toVec3(bestNormal, normalWorld);
-				bestNormal.normalize();
+				M.vec3_toVec3(candidateNormal, normalWorld);
+				candidateNormal.normalize();
 
 				var closestWorld:IVec3;
 				var closestLocalI:IVec3;
 				M.vec3_fromVec3(closestLocalI, closestLocal);
 				M.vec3_mulMat3(closestWorld, closestLocalI, tf2._rotation);
 				M.vec3_add(closestWorld, closestWorld, tf2._position);
-				M.vec3_toVec3(bestPointMesh, closestWorld);
+				M.vec3_toVec3(candidatePointMesh, closestWorld);
 
-				M.vec3_toVec3(bestPointConvex, tf1._position);
-				bestPointConvex.addScaledEq(bestNormal, -margin1);
+				M.vec3_toVec3(candidatePointConvex, tf1._position);
+				candidatePointConvex.addScaledEq(candidateNormal, -margin1);
 
-				bestDepth = depth;
-				found = true;
+				report(depth);
 
 				// The maximum possible query depth is marginSum (distance 0),
-				// so no later triangle can improve the result.
-				if (isQuery && bestDepth >= marginSum) break;
+				// so no later triangle can improve the deepest contact.
+				if (!collectAll && isQuery && bestDepth >= marginSum) break;
 			}
 		}
 
-		if (found) {
-			setBestContact(result, bestDepth);
-		}
+		if (bestFound) setBestContact(result);
 	}
 
 	function closestPointOnTriangle(

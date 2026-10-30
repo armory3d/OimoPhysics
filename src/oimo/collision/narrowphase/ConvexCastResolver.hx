@@ -1,7 +1,6 @@
 package oimo.collision.narrowphase;
 import oimo.collision.geometry.*;
 import oimo.collision.narrowphase.detector.gjkepa.*;
-import oimo.common.MathUtil;
 import oimo.common.Transform;
 import oimo.common.Vec3;
 import oimo.m.IVec3;
@@ -9,15 +8,16 @@ import oimo.m.M;
 
 /**
  * Resolves convex casts against the supported collision geometries.
+ *
+ * A static mesh reports one hit per triangle the cast reaches, like Bullet
+ * Physics' per-triangle results for convex-vs-concave casts, so a callback can
+ * filter single triangles instead of the whole mesh.
  */
 @:build(oimo.m.B.bu())
 class ConvexCastResolver {
-	var convex:ConvexGeometry;
-	var begin:Transform;
-	var translation:Vec3;
 	var zero:Vec3;
+	var hits:Array<RayCastHit>;
 
-	var triangleHit:RayCastHit;
 	var triangleVertices:Array<Vec3>;
 	var triangleGeom:ConvexHullGeometry;
 	var triangles:Array<Int>;
@@ -25,14 +25,11 @@ class ConvexCastResolver {
 	var localAabb:Aabb;
 	var edge1:Vec3;
 	var edge2:Vec3;
-	var sweptAabbReady:Bool;
 
 	public function new() {
-		begin = new Transform();
-		translation = new Vec3();
 		zero = new Vec3();
+		hits = [new RayCastHit()];
 
-		triangleHit = new RayCastHit();
 		triangleVertices = [new Vec3(), new Vec3(), new Vec3()];
 		triangleGeom = new ConvexHullGeometry(triangleVertices);
 		triangleGeom._gjkMargin = 0;
@@ -41,109 +38,88 @@ class ConvexCastResolver {
 		localAabb = new Aabb();
 		edge1 = new Vec3();
 		edge2 = new Vec3();
-		sweptAabbReady = false;
-
-		convex = null;
 	}
 
-	public function prepare(convex:ConvexGeometry, begin:Transform, translation:Vec3):Void {
-		this.convex = convex;
-		if (begin == null || translation == null) {
-			this.convex = null;
-			sweptAabbReady = false;
-			return;
-		}
-		this.begin.copyFrom(begin);
-		this.translation.copyFrom(translation);
-		sweptAabbReady = false;
-	}
-
-	public function resolve(target:Geometry, targetTransform:Transform, hit:RayCastHit):Bool {
-		if (convex == null || target == null || targetTransform == null || hit == null) return false;
-
+	/**
+	 * Casts `convex` from `begin` by `translation` against `target` and returns
+	 * the number of hits: at most one for a convex target, one per reached
+	 * triangle for a static mesh. Read them with `getHit`; they stay valid until
+	 * the next call.
+	 */
+	public function resolve(convex:ConvexGeometry, begin:Transform, translation:Vec3, target:Geometry, targetTransform:Transform):Int {
 		var type:Int = target._type;
 
 		if (type == GeometryType._STATIC_MESH) {
-			return castStaticMesh(cast target, targetTransform, hit);
+			return castStaticMesh(convex, begin, translation, cast target, targetTransform);
 		}
 
-		if (type < GeometryType._CONVEX_MIN || type > GeometryType._CONVEX_MAX) return false;
+		if (type < GeometryType._CONVEX_MIN || type > GeometryType._CONVEX_MAX) return 0;
 
-		return GjkEpa.getInstance().convexCast(convex, cast target, begin, targetTransform, translation, zero, hit);
+		var hit:RayCastHit = hits[0];
+		if (!GjkEpa.getInstance().convexCast(convex, cast target, begin, targetTransform, translation, zero, hit)) return 0;
+		hit.triangleIndex = -1;
+		return 1;
 	}
 
-	function castStaticMesh(staticMesh:StaticMeshGeometry, meshTransform:Transform, hit:RayCastHit):Bool {
-		if (convex == null || staticMesh == null || meshTransform == null || hit == null) return false;
+	public inline function getHit(index:Int):RayCastHit {
+		return hits[index];
+	}
+
+	function castStaticMesh(convex:ConvexGeometry, begin:Transform, translation:Vec3, staticMesh:StaticMeshGeometry, meshTransform:Transform):Int {
+		// Candidate triangles: those in the box swept by the convex
+		convex._computeAabb(sweptAabb, begin);
+		var tl:IVec3;
+		var zeroI:IVec3;
+		var minTl:IVec3;
+		var maxTl:IVec3;
+		M.vec3_fromVec3(tl, translation);
+		M.vec3_zero(zeroI);
+		M.vec3_min(minTl, tl, zeroI);
+		M.vec3_max(maxTl, tl, zeroI);
+		M.vec3_add(sweptAabb._min, sweptAabb._min, minTl);
+		M.vec3_add(sweptAabb._max, sweptAabb._max, maxTl);
+
+		staticMesh.worldAabbToLocal(sweptAabb, meshTransform, localAabb);
+		staticMesh.queryTrianglesInto(localAabb, triangles);
+		if (triangles.length == 0) return 0;
 
 		// A hull's support points are not shrunk by its GJK margin, unlike the
 		// primitives. Casting with the margin therefore reports a hit before the
-		// hull actually touches the mesh. Suppress it only for this mesh cast.
-		var restoreHullMargin:Bool = convex._type == GeometryType._CONVEX_HULL && convex._gjkMargin != 0;
-		var hullMargin:Float = 0;
-		if (restoreHullMargin) {
-			hullMargin = convex._gjkMargin;
-			convex._gjkMargin = 0;
+		// hull actually touches the mesh. Suppress it only for this mesh cast,
+		// and restore it even if GJK throws.
+		var hullMargin:Float = convex._gjkMargin;
+		var suppressHullMargin:Bool = convex._type == GeometryType._CONVEX_HULL && hullMargin != 0;
+		if (suppressHullMargin) convex._gjkMargin = 0;
+		var numHits:Int;
+		try {
+			numHits = castTriangles(convex, begin, translation, staticMesh, meshTransform);
+		} catch (e:Dynamic) {
+			if (suppressHullMargin) convex._gjkMargin = hullMargin;
+			throw e;
 		}
+		if (suppressHullMargin) convex._gjkMargin = hullMargin;
+		return numHits;
+	}
 
-		if (!sweptAabbReady) {
-			convex._computeAabb(sweptAabb, begin);
-
-			var minx:Float = M.vec3_get(sweptAabb._min, 0);
-			var miny:Float = M.vec3_get(sweptAabb._min, 1);
-			var minz:Float = M.vec3_get(sweptAabb._min, 2);
-			var maxx:Float = M.vec3_get(sweptAabb._max, 0);
-			var maxy:Float = M.vec3_get(sweptAabb._max, 1);
-			var maxz:Float = M.vec3_get(sweptAabb._max, 2);
-
-			if (translation.x < 0) minx += translation.x; else maxx += translation.x;
-			if (translation.y < 0) miny += translation.y; else maxy += translation.y;
-			if (translation.z < 0) minz += translation.z; else maxz += translation.z;
-
-			M.vec3_set(sweptAabb._min, minx, miny, minz);
-			M.vec3_set(sweptAabb._max, maxx, maxy, maxz);
-			sweptAabbReady = true;
-		}
-
-		staticMesh.worldAabbToLocal(sweptAabb, meshTransform, localAabb);
-
-		staticMesh.queryTrianglesInto(localAabb, triangles);
-		if (triangles.length == 0) {
-			if (restoreHullMargin) convex._gjkMargin = hullMargin;
-			return false;
-		}
-
+	function castTriangles(convex:ConvexGeometry, begin:Transform, translation:Vec3, staticMesh:StaticMeshGeometry, meshTransform:Transform):Int {
 		var gjkEpa:GjkEpa = GjkEpa.getInstance();
-		var bestFraction:Float = MathUtil.POSITIVE_INFINITY;
-		var found:Bool = false;
+		var numHits:Int = 0;
 
 		for (i in 0...triangles.length) {
-			staticMesh.getTriangleVertices(triangles[i], triangleVertices[0], triangleVertices[1], triangleVertices[2]);
+			var triangle:Int = triangles[i];
+			staticMesh.getTriangleVertices(triangle, triangleVertices[0], triangleVertices[1], triangleVertices[2]);
 
-			var v1:Vec3 = triangleVertices[0];
-			var v2:Vec3 = triangleVertices[1];
-			var v3:Vec3 = triangleVertices[2];
+			edge1.copyFrom(triangleVertices[1]).subEq(triangleVertices[0]);
+			edge2.copyFrom(triangleVertices[2]).subEq(triangleVertices[0]);
+			if (edge1.crossEq(edge2).lengthSq() < 1e-12) continue; // degenerate
 
-			edge1.copyFrom(v2).subEq(v1);
-			edge2.copyFrom(v3).subEq(v1);
-			if (edge1.crossEq(edge2).lengthSq() < 1e-12) continue;
-
-			if (gjkEpa.convexCast(convex, triangleGeom, begin, meshTransform, translation, zero, triangleHit)) {
-				if (triangleHit.fraction < bestFraction) {
-					bestFraction = triangleHit.fraction;
-					hit.position.copyFrom(triangleHit.position);
-					hit.normal.copyFrom(triangleHit.normal);
-					found = true;
-
-					// No other triangle can be hit earlier.
-					if (bestFraction <= 0) break;
-				}
+			if (numHits == hits.length) hits.push(new RayCastHit());
+			var hit:RayCastHit = hits[numHits];
+			if (gjkEpa.convexCast(convex, triangleGeom, begin, meshTransform, translation, zero, hit)) {
+				hit.triangleIndex = triangle;
+				numHits++;
 			}
 		}
-
-		if (restoreHullMargin) convex._gjkMargin = hullMargin;
-
-		if (!found) return false;
-		hit.fraction = bestFraction;
-		return true;
+		return numHits;
 	}
 }

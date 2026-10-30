@@ -1,7 +1,4 @@
 package oimo.dynamics.callback;
-
-import oimo.dynamics.constraint.contact.Manifold;
-import oimo.collision.narrowphase.DetectorResult;
 import oimo.dynamics.Contact;
 
 /**

@@ -27,8 +27,9 @@ class BroadPhase {
 	var _proxyPairPool:ProxyPair;
 	var _idCount:Int;
 
-	var _sweepAabb:Array<Aabb>;
-	var _sweepTransform:Transform;
+	var _sweepBeginAabb:Aabb;
+	var _sweepEndAabb:Aabb;
+	var _sweepEndTransform:Transform;
 
 	var zero:Vec3;
 	var rayCastHit:RayCastHit;
@@ -49,8 +50,9 @@ class BroadPhase {
 		_proxyPairPool = null;
 		_idCount = 0;
 
-		_sweepAabb = [new Aabb(), new Aabb()];
-		_sweepTransform = new Transform();
+		_sweepBeginAabb = new Aabb();
+		_sweepEndAabb = new Aabb();
+		_sweepEndTransform = new Transform();
 
 		zero = new Vec3();
 		rayCastHit = new RayCastHit();
@@ -168,15 +170,15 @@ class BroadPhase {
 	 * Callers still run the exact narrow-phase test on every candidate.
 	**/
 	extern inline function aabbConvexSweepTest(aabbMin:IVec3, aabbMax:IVec3, convex:ConvexGeometry, begin:Transform, translation:Vec3):Bool {
-		var beginAabb:Aabb = _sweepAabb[0];
-		var endAabb:Aabb = _sweepAabb[1];
+		var beginAabb:Aabb = _sweepBeginAabb;
+		var endAabb:Aabb = _sweepEndAabb;
 
 		var tl:IVec3;
 		M.vec3_fromVec3(tl, translation);
 
 		convex._computeAabb(beginAabb, begin);
 
-		var endTransform:Transform = _sweepTransform;
+		var endTransform:Transform = _sweepEndTransform;
 		M.mat3_assign(endTransform._rotation, begin._rotation);
 		M.vec3_add(endTransform._position, begin._position, tl);
 		convex._computeAabb(endAabb, endTransform);

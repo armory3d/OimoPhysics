@@ -24,6 +24,12 @@ class ConvexOverlapHit {
 	 */
 	public var points:Vector<ConvexOverlapPoint>;
 
+	/**
+	 * The index of the static mesh triangle this hit is against, or `-1` when the
+	 * target geometry is not a static mesh.
+	 */
+	public var triangleIndex:Int;
+
 	@:dox(hide)
 	public function new() {
 		normal = new Vec3();
@@ -32,12 +38,27 @@ class ConvexOverlapHit {
 		for (i in 0...Setting.maxManifoldPoints) {
 			points[i] = new ConvexOverlapPoint();
 		}
+		triangleIndex = -1;
+	}
+
+	/**
+	 * Sets a single-point hit.
+	 */
+	public function setSingle(normal:Vec3, position1:Vec3, position2:Vec3, depth:Float, triangleIndex:Int):Void {
+		this.normal.copyFrom(normal);
+		numPoints = 1;
+		var point:ConvexOverlapPoint = points[0];
+		point.position1.copyFrom(position1);
+		point.position2.copyFrom(position2);
+		point.depth = depth;
+		this.triangleIndex = triangleIndex;
 	}
 
 	/**
 	 * Copies the detector result into this hit.
 	 */
 	public function copyFrom(result:DetectorResult):Void {
+		triangleIndex = -1;
 		normal.copyFrom(result.normal);
 
 		var count:Int = result.numPoints;
@@ -71,6 +92,7 @@ class ConvexOverlapHit {
 	public inline function clear():Void {
 		normal.zero();
 		numPoints = 0;
+		triangleIndex = -1;
 		for (p in points) {
 			p.position1.zero();
 			p.position2.zero();

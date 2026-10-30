@@ -6,7 +6,6 @@ import oimo.collision.narrowphase.detector.GjkEpaDetector;
 import oimo.collision.narrowphase.detector.SphereBoxDetector;
 import oimo.collision.narrowphase.detector.SphereCapsuleDetector;
 import oimo.collision.narrowphase.detector.SphereSphereDetector;
-import oimo.collision.narrowphase.detector.ConvexStaticMeshDetector;
 import oimo.collision.geometry.GeometryType;
 import oimo.collision.narrowphase.detector.*;
 

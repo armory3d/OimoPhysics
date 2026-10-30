@@ -16,6 +16,8 @@ class ConvexOverlapResolver {
 	var collisionMatrix:CollisionMatrix;
 	var staticMeshDetector:ConvexStaticMeshDetector;
 	var result:DetectorResult;
+	var convexHit:ConvexOverlapHit;
+	var meshHits:Bool;
 
 	public function new() {
 		convex = null;
@@ -23,6 +25,8 @@ class ConvexOverlapResolver {
 		collisionMatrix = new CollisionMatrix();
 		staticMeshDetector = new ConvexStaticMeshDetector(false, true);
 		result = new DetectorResult();
+		convexHit = new ConvexOverlapHit();
+		meshHits = false;
 	}
 
 	/**
@@ -38,27 +42,33 @@ class ConvexOverlapResolver {
 	}
 
 	/**
-	 * Tests `target` against the prepared query shape and writes the overlap
-	 * manifold to `hit`.
+	 * Tests `target` against the prepared query shape and returns the number of
+	 * hits: at most one for a convex target, one per overlapping triangle for a
+	 * static mesh. Read them with `getHit`; they stay valid until the next call.
 	 */
-	public function resolve(target:Geometry, targetTransform:Transform, hit:ConvexOverlapHit):Bool {
-		if (convex == null || target == null || targetTransform == null || hit == null) return false;
+	public function resolve(target:Geometry, targetTransform:Transform):Int {
+		meshHits = false;
+		if (convex == null || target == null || targetTransform == null) return 0;
 
 		if (target._type == GeometryType._STATIC_MESH) {
-			// Use a dedicated query-mode detector in convex-first order. This
-			// avoids the shared contact detector's hull margin and persistence,
-			// and guarantees the normal points from the mesh to the query shape.
-			staticMeshDetector.detect(result, convex, target, transform, targetTransform, null);
-		} else {
-			var detector:Detector = collisionMatrix.getDetector(convex._type, target._type);
-			if (detector == null) return false;
-
-			detector.detect(result, convex, target, transform, targetTransform, null);
+			// A dedicated query-mode detector in convex-first order. This avoids
+			// the shared contact detector's hull margin and persistence, and
+			// guarantees the normal points from the mesh to the query shape.
+			meshHits = true;
+			return staticMeshDetector.detectAll(convex, cast target, transform, targetTransform);
 		}
 
-		if (result.numPoints == 0) return false;
+		var detector:Detector = collisionMatrix.getDetector(convex._type, target._type);
+		if (detector == null) return 0;
 
-		hit.copyFrom(result);
-		return true;
+		detector.detect(result, convex, target, transform, targetTransform, null);
+		if (result.numPoints == 0) return 0;
+
+		convexHit.copyFrom(result);
+		return 1;
+	}
+
+	public inline function getHit(index:Int):ConvexOverlapHit {
+		return meshHits ? staticMeshDetector.getContact(index) : convexHit;
 	}
 }
