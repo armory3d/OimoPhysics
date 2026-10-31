@@ -51,9 +51,9 @@ class ConvexOverlapResolver {
 		if (convex == null || target == null || targetTransform == null) return 0;
 
 		if (target._type == GeometryType._STATIC_MESH) {
-			// A dedicated query-mode detector in convex-first order. This avoids
-			// the shared contact detector's hull margin and persistence, and
-			// guarantees the normal points from the mesh to the query shape.
+			// A dedicated detector in query mode (strict overlap, one contact per
+			// triangle) and convex-first order, so the normal points from the mesh
+			// to the query shape.
 			meshHits = true;
 			return staticMeshDetector.detectAll(convex, cast target, transform, targetTransform);
 		}

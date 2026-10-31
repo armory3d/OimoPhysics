@@ -81,27 +81,7 @@ class ConvexCastResolver {
 
 		staticMesh.worldAabbToLocal(sweptAabb, meshTransform, localAabb);
 		staticMesh.queryTrianglesInto(localAabb, triangles);
-		if (triangles.length == 0) return 0;
 
-		// A hull's support points are not shrunk by its GJK margin, unlike the
-		// primitives. Casting with the margin therefore reports a hit before the
-		// hull actually touches the mesh. Suppress it only for this mesh cast,
-		// and restore it even if GJK throws.
-		var hullMargin:Float = convex._gjkMargin;
-		var suppressHullMargin:Bool = convex._type == GeometryType._CONVEX_HULL && hullMargin != 0;
-		if (suppressHullMargin) convex._gjkMargin = 0;
-		var numHits:Int;
-		try {
-			numHits = castTriangles(convex, begin, translation, staticMesh, meshTransform);
-		} catch (e:Dynamic) {
-			if (suppressHullMargin) convex._gjkMargin = hullMargin;
-			throw e;
-		}
-		if (suppressHullMargin) convex._gjkMargin = hullMargin;
-		return numHits;
-	}
-
-	function castTriangles(convex:ConvexGeometry, begin:Transform, translation:Vec3, staticMesh:StaticMeshGeometry, meshTransform:Transform):Int {
 		var gjkEpa:GjkEpa = GjkEpa.getInstance();
 		var numHits:Int = 0;
 

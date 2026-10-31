@@ -168,13 +168,9 @@ class ConvexStaticMeshDetector extends Detector {
 		result.incremental = false;
 		bestFound = false;
 
+		// Hulls keep their GJK margin in queries too, so queries see them exactly
+		// as contacts do (a hull is inflated by its margin, like in Bullet).
 		var margin1:Float = convex._gjkMargin;
-		if (isQuery && convex._type == GeometryType._CONVEX_HULL) {
-			// Hull support points are already on the hull surface, unlike the
-			// shrunken cores used by primitives. Adding the margin would inflate
-			// the hull and manufacture hits for queries that only touch it.
-			margin1 = 0;
-		}
 		var margin2:Float = triGeom._gjkMargin;
 		var marginSum:Float = margin1 + margin2;
 
